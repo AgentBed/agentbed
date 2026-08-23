@@ -23,6 +23,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentbed-gw"
+version = "0.0.1"
+dependencies = [
+ "agentbed-broker",
+ "agentbed-protocol",
+ "agentbed-schemas",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "agentbed-protocol"
 version = "0.0.1"
 dependencies = [

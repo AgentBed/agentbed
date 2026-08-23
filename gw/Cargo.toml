@@ -1,0 +1,25 @@
+[package]
+name = "agentbed-gw"
+description = "The unprivileged half of the split: MCP front over stdio, schema validation, and a relay to the broker. Holds no privileges and no secrets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "agentbed-gw"
+path = "src/main.rs"
+
+[dependencies]
+agentbed-protocol = { workspace = true }
+agentbed-schemas = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+agentbed-broker = { path = "../broker" }
+
+[lints]
+workspace = true
