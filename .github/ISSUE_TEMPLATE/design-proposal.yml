@@ -1,0 +1,37 @@
+name: Design proposal
+description: Propose a change to the architecture, a normative document, or the roadmap — before writing code.
+labels: ["design"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Changes to normative documents land as a new ADR or an explicit
+        revision of the affected document (see CONTRIBUTING.md). This issue is
+        where the discussion happens first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What the current design gets wrong or cannot do. Cite sections.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Which documents, schemas, and gate exit conditions this touches; what becomes easier or harder.
+    validations:
+      required: true
+  - type: dropdown
+    id: gate
+    attributes:
+      label: Earliest gate affected
+      options: ["Gate 0", "Gate 1", "Gate 2", "Gate 3", "Gate 4", "Gate 5", "Gate 6", "Later"]
+    validations:
+      required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/AgentBed/agentbed/security/advisories/new
+    about: Anything exploitable — report privately, never as a public issue.
+  - name: Questions & open-ended discussion
+    url: https://github.com/AgentBed/agentbed/discussions
+    about: Speculative design debate and questions live in Discussions, keeping the issue tracker for actionable findings.

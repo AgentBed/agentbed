@@ -1,0 +1,37 @@
+# cargo-deny configuration — checked in CI (.github/workflows/supply-chain.yml).
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive licenses compatible with distributing Agentbed under Apache-2.0.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "MIT-0",
+  "Unicode-3.0",
+  "CDLA-Permissive-2.0",
+  "OpenSSL",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions are common in fresh trees; surface them without failing CI.
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace-internal `{ path = "..." }` dependencies carry no version on purpose.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

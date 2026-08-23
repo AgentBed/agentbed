@@ -1,0 +1,28 @@
+name: docs
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["**/*.md", ".github/workflows/docs.yml"]
+  pull_request:
+    paths: ["**/*.md", ".github/workflows/docs.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  internal-links:
+    # The documents under docs/ are normative, so a broken cross-reference is
+    # a real defect. Offline mode checks only repo-internal links and anchors;
+    # external URLs are deliberately not checked to keep this job deterministic.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
+        with:
+          args: --offline --include-fragments --no-progress "**/*.md"
+          fail: true

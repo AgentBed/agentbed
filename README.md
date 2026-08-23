@@ -57,6 +57,8 @@ A prior-art sweep on 2026-08-22 found every piece in isolation — read-only sys
 - [ADR-001 — Architecture](docs/adr/ADR-001-agentbed-architecture.md) (decision, manifests, transaction engine, milestones)
 - [Prior art](docs/research/prior-art.md)
 - [Review brief](docs/REVIEW.md) — how to review this design and what we want challenged
+- [Contributing](CONTRIBUTING.md) — ground rules, where things live, how to open findings
+- [Security policy](SECURITY.md) — private reporting for anything exploitable
 
 ## Roadmap (gated — see [docs/roadmap.md](docs/roadmap.md))
 

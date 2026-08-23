@@ -1,0 +1,38 @@
+name: Bug report
+description: Something in the spike code misbehaves.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Remember: the documents are normative. If the code does what the code
+        intends but the *design* is wrong, open a **Review finding** instead.
+        If the bug is exploitable, use private reporting — see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Cite the normative document section if the expectation comes from one.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Commands, manifests, token store contents — whatever it takes.
+      render: sh
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS/distro, rustc version (`rustc -V`), commit (`git rev-parse HEAD`)
+    validations:
+      required: true
