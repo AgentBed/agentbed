@@ -19,6 +19,25 @@
 //! points: "a bug in the broker is a full bypass"), which is why it stays this
 //! small and why the workspace lints refuse panicking constructs in it.
 
+// The broker is Linux-only, and says so at compile time rather than through a
+// pile of "cannot find value `SO_PEERCRED`" errors.
+//
+// This is not an oversight to be portability-patched later: peer credentials
+// (`SO_PEERCRED`/`ucred`) and the Landlock probe are Linux interfaces, and the
+// design around them assumes systemd, cgroups and nftables (ADR-001 §5.0).
+// macOS has analogues for the first (`LOCAL_PEERCRED`, `getpeereid`) but none
+// for the rest, so a macOS broker could authenticate a channel and then enforce
+// nothing — which is a worse outcome than not building.
+//
+// The other crates are portable: `agentbed-protocol` and `agentbed-schemas`
+// build and test anywhere, and `agentbed-gw` needs only Unix sockets.
+#[cfg(not(target_os = "linux"))]
+compile_error!(
+    "agentbed-broker targets Linux only (SO_PEERCRED, Landlock, systemd, cgroups \
+     — see ADR-001 §5.0). Build it on a Linux host or VM. On other platforms the \
+     portable crates still work: cargo test -p agentbed-protocol -p agentbed-schemas"
+);
+
 pub mod adapter;
 pub mod config;
 pub mod digest;

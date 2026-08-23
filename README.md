@@ -17,11 +17,27 @@ A small set of cooperating processes — an unprivileged gateway, a minimal priv
 
 ## Building the Gate 0 spike
 
+**Linux only, and deliberately so.** `agentbed-broker` uses `SO_PEERCRED` for
+peer credentials and probes Landlock, and the design around them assumes
+systemd, cgroups and nftables (ADR-001 §5.0). It does not build on macOS or
+Windows, and says so with a single compile error rather than a pile of missing
+symbols. Targets are NixOS VMs (development) and Ubuntu 24.04 (Node-D).
+
 ```sh
 cargo build --workspace          # gw, broker, protocol, schemas
 cargo test  --workspace          # includes the two Gate 0 gating tests
 cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+On a Mac or Windows box, the portable crates still work — the wire protocol and
+the schemas, which is where most of the contract lives:
+
+```sh
+cargo test -p agentbed-protocol -p agentbed-schemas
+```
+
+For the rest, use a Linux VM, a container, or CI. `docs/protocol.md` and
+`docs/effects.md` are readable anywhere and are the normative part.
 
 Running the two processes by hand:
 
