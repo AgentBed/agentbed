@@ -109,7 +109,7 @@ v1 serves exactly one owner — no roles, no per-person approval authority. But 
 
 ## 6. What this imposes on Agentbed *now* (requirements to carry into Gates 1–3 design)
 
-These are the only items with near-term cost; each is a note against existing ADR sections, not new scope:
+These are the only items with near-term cost; each is a note against existing ADR sections, not new scope. **They are bound to gates as the "Staff-readiness conditions" block in [roadmap.md](../roadmap.md)** (items 1 and 4 → Gate 2; items 2 and 3 → Gates 1–3), which is the normative copy; this list is the rationale:
 
 1. **Derived / attenuated identities (future-proofing §5 identity).** The runtime will mint many short-lived workers. Today Agentbed knows only statically registered agent tokens, and skill-level narrowing is advisory-only. Roadmap candidate (post-G3): a parent identity may request a short-lived child credential bound to a *narrowed* manifest (subset check enforced by the broker). This is the same mechanism that would make skill narrowing a host boundary — one feature, two payoffs. Design the token store so "token → parent chain → manifest" is representable.
 2. **`agentbed://events` must be a durable, cursor-resumable stream**, not fire-and-forget — an event-driven CoS that can crash and rehydrate needs replay-from-cursor. (Any webhook remains a convenience on top.)
