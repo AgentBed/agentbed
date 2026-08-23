@@ -20,12 +20,14 @@
 //! small and why the workspace lints refuse panicking constructs in it.
 
 pub mod adapter;
-pub mod audit;
 pub mod config;
+pub mod digest;
 pub mod dispatch;
 pub mod host;
 pub mod identity;
+pub mod jcs;
 pub mod manifest;
+pub mod observability;
 pub mod peercred;
 pub mod policy;
 pub mod quota;

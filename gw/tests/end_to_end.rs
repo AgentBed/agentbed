@@ -13,11 +13,11 @@
 )]
 
 use agentbed_broker::adapter::UnresolvedAdapter;
-use agentbed_broker::audit::{AuditSink, StderrAudit};
 use agentbed_broker::config::BrokerConfig;
 use agentbed_broker::dispatch::Dispatcher;
 use agentbed_broker::identity::TokenStore;
 use agentbed_broker::manifest::ManifestStore;
+use agentbed_broker::observability::{ObservationSink, StderrObserver};
 use agentbed_broker::server::Server;
 use agentbed_gw::{mcp, BrokerClient, Session};
 use agentbed_protocol::wire::Token;
@@ -58,7 +58,7 @@ impl Fixture {
             ManifestStore::new(manifest_dir()),
             Box::new(UnresolvedAdapter),
         ));
-        let audit: Arc<dyn AuditSink> = Arc::new(StderrAudit);
+        let audit: Arc<dyn ObservationSink> = Arc::new(StderrObserver);
         let server = Server::start(&config, dispatcher, audit).expect("broker starts");
         Fixture { server, dir }
     }

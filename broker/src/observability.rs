@@ -1,23 +1,41 @@
-//! Audit records.
+//! Structured, redacted observability.
 //!
-//! Gate 0 writes structured lines; the hash chain and the WORM anchor are
-//! Gate 2 (`docs/roadmap.md`), and the schema the chain will use already exists
-//! in `schemas/ledger-record.schema.json`.
+//! # This is not the audit ledger
 //!
-//! The record exists at Gate 0 for one reason beyond debugging: it is where the
-//! **resolved** identity is written down. A test that wants to prove the broker
-//! ignored a caller's asserted identity reads it here, from the same value the
-//! handler acted on — not from the response, which a future refactor could
-//! decouple from the decision.
+//! Naming matters here, so the module says plainly what it is: Gate 0 emits
+//! structured local observations of what the broker decided. It is **not** the
+//! anchored audit ledger of ADR §5.2 — there is no hash chain, no sequence
+//! number, no off-host WORM anchor, no tamper-evidence, and no durability
+//! guarantee at all. A process restart loses everything written here.
+//!
+//! The ledger arrives at Gate 2, and the record shape it will use already
+//! exists as `schemas/ledger-record.schema.json`. Calling this an "audit trail"
+//! before then would claim a property nobody has built, which is exactly the
+//! kind of claim the threat model asks these documents not to make.
+//!
+//! # Redaction
+//!
+//! Observations carry the *resolved* identity, never the credential that
+//! produced it, and never caller-supplied strings beyond a correlation id
+//! constrained to graphic ASCII. `Token`'s `Debug` is redacted at the protocol
+//! layer, so a token cannot reach an observation even through a formatting
+//! mistake — `no_credential_material_reaches_an_observation` asserts it.
+//!
+//! # Why it exists at Gate 0 at all
+//!
+//! Beyond debugging: this is where the **resolved** identity is written down. A
+//! test proving the broker ignored a caller's asserted identity reads it here,
+//! from the same value the handler acted on — not from the response, which a
+//! later refactor could decouple from the decision.
 
 use crate::peercred::PeerCredentials;
 use agentbed_protocol::digest::Digest;
 use agentbed_protocol::wire::{DecisionStage, EffectClass, ErrorCode};
 use std::sync::{Arc, Mutex};
 
-/// What happened to one request.
+/// What the broker decided about one request.
 #[derive(Debug, Clone)]
-pub struct AuditRecord {
+pub struct CallObservation {
     /// Correlation id, when the request was well-formed enough to have one.
     pub request_id: Option<String>,
     /// Identity the broker resolved. `None` means no identity was established,
@@ -43,11 +61,11 @@ pub struct AuditRecord {
     pub reason: &'static str,
 }
 
-impl AuditRecord {
+impl CallObservation {
     /// A record for a request that never reached identity resolution.
     #[must_use]
     pub fn rejected(peer: PeerCredentials, error: ErrorCode, reason: &'static str) -> Self {
-        AuditRecord {
+        CallObservation {
             request_id: None,
             agent_id: None,
             peer,
@@ -63,24 +81,25 @@ impl AuditRecord {
     }
 }
 
-/// Where audit records go.
-pub trait AuditSink: Send + Sync {
+/// Where observations go.
+pub trait ObservationSink: Send + Sync {
     /// Record one decision. Implementations must not panic and must not block
-    /// indefinitely: this runs on the connection's thread.
-    fn record(&self, record: AuditRecord);
+    /// indefinitely: this runs on the connection's thread, so an observability
+    /// failure must never become a request-path failure.
+    fn record(&self, record: CallObservation);
 }
 
-/// Writes one line per record to stderr, for the spike.
+/// Writes one line per observation to stderr, for the spike.
 #[derive(Debug, Default)]
-pub struct StderrAudit;
+pub struct StderrObserver;
 
-impl AuditSink for StderrAudit {
-    fn record(&self, record: AuditRecord) {
+impl ObservationSink for StderrObserver {
+    fn record(&self, record: CallObservation) {
         // Never interpolate caller-supplied strings beyond the correlation id
         // (which is constrained to graphic ASCII) and the resolved agent id
         // (which comes from the token store, not the wire).
         eprintln!(
-            "audit agent={} peer_uid={} op={} allowed={} stage={} error={} reason={} req={}",
+            "observation agent={} peer_uid={} op={} allowed={} stage={} error={} reason={} req={}",
             record.agent_id.as_deref().unwrap_or("-"),
             record.peer.uid,
             record.op.unwrap_or("-"),
@@ -95,25 +114,25 @@ impl AuditSink for StderrAudit {
     }
 }
 
-/// Collects records in memory so tests can assert on what the broker decided.
+/// Collects observations in memory so tests can assert on what the broker decided.
 #[derive(Debug, Clone, Default)]
-pub struct CollectingAudit {
-    records: Arc<Mutex<Vec<AuditRecord>>>,
+pub struct CollectingObserver {
+    records: Arc<Mutex<Vec<CallObservation>>>,
 }
 
-impl CollectingAudit {
+impl CollectingObserver {
     /// A snapshot of everything recorded so far.
     ///
     /// Returns an empty vec if a previous panic poisoned the lock — the broker
     /// must not turn an audit-side failure into a request-path failure.
     #[must_use]
-    pub fn records(&self) -> Vec<AuditRecord> {
+    pub fn records(&self) -> Vec<CallObservation> {
         self.records.lock().map(|r| r.clone()).unwrap_or_default()
     }
 }
 
-impl AuditSink for CollectingAudit {
-    fn record(&self, record: AuditRecord) {
+impl ObservationSink for CollectingObserver {
+    fn record(&self, record: CallObservation) {
         if let Ok(mut guard) = self.records.lock() {
             guard.push(record);
         }

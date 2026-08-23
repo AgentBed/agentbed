@@ -105,6 +105,8 @@ fn run_all_cases() {
     malformed_bodies_are_refused(&harness);
     let unprocessed = framing_abuse_is_refused(&harness);
     partial_frames_are_never_processed(&harness);
+    a_malformed_frame_does_not_poison_the_next_valid_one(&harness);
+    two_valid_pipelined_frames_get_two_ordered_results(&harness);
     byte_at_a_time_delivery_yields_exactly_one_result(&harness);
     random_garbage_is_survived(&harness);
 
@@ -147,6 +149,15 @@ fn malformed_bodies_are_refused(harness: &Harness) {
         b"{}".to_vec(),
         // Valid JSON, wrong envelope.
         br#"{"v":1}"#.to_vec(),
+        // Protocol version missing entirely.
+        br#"{"id":"01J","op":"system.info","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
+        // Protocol version present but null / wrongly typed.
+        br#"{"v":null,"id":"01J","op":"system.info","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
+        // Operation version the broker does not implement.
+        br#"{"v":1,"id":"01J","op":"system.info","op_version":2,"auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
+        br#"{"v":1,"id":"01J","op":"system.info","op_version":0,"auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
+        // Operation version wrongly typed.
+        br#"{"v":1,"id":"01J","op":"system.info","op_version":"1","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
         br#"{"v":2,"id":"01J","op":"system.info","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
         br#"{"v":1,"id":"01J","op":"system.reboot","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
         br#"{"v":1,"id":"01J","op":"system.info","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{},"extra":1}"#.to_vec(),
@@ -276,6 +287,57 @@ fn partial_frames_are_never_processed(harness: &Harness) {
         added, 1,
         "only the complete frame may be audited, got {added} records"
     );
+}
+
+/// A complete-but-malformed frame is answered and the connection survives, so
+/// a valid frame behind it is still served — and served *correctly*, not
+/// contaminated by the previous frame's state.
+fn a_malformed_frame_does_not_poison_the_next_valid_one(harness: &Harness) {
+    let mut stream = harness.connect();
+
+    let malformed = br#"{"v":1,"id":"01J-bad","op":"system.info","auth":{"token":"x"},"nope":1}"#;
+    let mut framed = u32::try_from(malformed.len())
+        .unwrap()
+        .to_be_bytes()
+        .to_vec();
+    framed.extend_from_slice(malformed);
+    send_raw(&mut stream, &framed);
+
+    let first = read_response(&mut stream).expect("the malformed frame is answered");
+    assert!(
+        first.result.is_none(),
+        "a malformed frame must not produce a result"
+    );
+
+    send_frame(&mut stream, &request_body("01J-after-bad", TOKEN_A));
+    let second = read_response(&mut stream).expect("the following valid frame is served");
+    assert_eq!(second.id.expect("an id").as_str(), "01J-after-bad");
+    assert!(
+        second.error.is_none(),
+        "a valid frame after a malformed one is still valid"
+    );
+}
+
+/// Two valid frames written back-to-back produce two results, in order.
+fn two_valid_pipelined_frames_get_two_ordered_results(harness: &Harness) {
+    let mut stream = harness.connect();
+    let mut both = Vec::new();
+    for id in ["01J-pipe-1", "01J-pipe-2"] {
+        let body = request_body(id, TOKEN_A);
+        both.extend_from_slice(&u32::try_from(body.len()).unwrap().to_be_bytes());
+        both.extend_from_slice(&body);
+    }
+    send_raw(&mut stream, &both);
+
+    for id in ["01J-pipe-1", "01J-pipe-2"] {
+        let response = read_response(&mut stream).expect("one response per frame");
+        assert_eq!(
+            response.id.expect("an id").as_str(),
+            id,
+            "responses must stay in order"
+        );
+        assert!(response.error.is_none());
+    }
 }
 
 fn byte_at_a_time_delivery_yields_exactly_one_result(harness: &Harness) {

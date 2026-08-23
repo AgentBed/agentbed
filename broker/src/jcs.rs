@@ -1,5 +1,9 @@
 //! RFC 8785 (JSON Canonicalization Scheme).
 //!
+//! Lives in the broker, not in the shared wire crate: the bytes a digest covers
+//! are a security decision (`docs/protocol.md` §4), and the code that produces
+//! them belongs with the authority that enforces them.
+//!
 //! `docs/effects.md` §1 makes these bytes load-bearing: approvals, the ledger,
 //! connectors and replay checks all bind *these exact bytes*, never a
 //! re-serialization. The rules implemented here:
@@ -11,7 +15,7 @@
 //! - numbers serialized as ECMAScript `Number::toString` (§3.2.2.3), with
 //!   `-0` normalized to `0`.
 
-use crate::strict::MAX_INTEROPERABLE_INT;
+use agentbed_protocol::strict::MAX_INTEROPERABLE_INT;
 use serde_json::Value;
 use std::fmt::Write as _;
 

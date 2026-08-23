@@ -15,9 +15,9 @@
 //! | idle/read timeout | none | closed |
 //! | clean EOF | none | closed |
 
-use crate::audit::{AuditRecord, AuditSink};
 use crate::config::BrokerConfig;
 use crate::dispatch::Dispatcher;
+use crate::observability::{CallObservation, ObservationSink};
 use crate::peercred::{peer_credentials, PeerCredentials};
 use agentbed_protocol::frame::{read_frame, write_frame, FrameError, MAX_FRAME_BYTES};
 use agentbed_protocol::wire::{ErrorCode, Response, ResponseError};
@@ -51,7 +51,7 @@ impl Server {
     pub fn start(
         config: &BrokerConfig,
         dispatcher: Arc<Dispatcher>,
-        audit: Arc<dyn AuditSink>,
+        observer: Arc<dyn ObservationSink>,
     ) -> io::Result<Server> {
         let socket_path = config.socket_path.clone();
         if let Some(parent) = socket_path.parent() {
@@ -71,7 +71,7 @@ impl Server {
             std::thread::Builder::new()
                 .name("broker-accept".to_owned())
                 .spawn(move || {
-                    accept_loop(&listener, &config, &dispatcher, &audit, &shutdown);
+                    accept_loop(&listener, &config, &dispatcher, &observer, &shutdown);
                 })?
         };
 
@@ -140,7 +140,7 @@ fn accept_loop(
     listener: &UnixListener,
     config: &BrokerConfig,
     dispatcher: &Arc<Dispatcher>,
-    audit: &Arc<dyn AuditSink>,
+    observer: &Arc<dyn ObservationSink>,
     shutdown: &Arc<AtomicBool>,
 ) {
     let live = Arc::new(AtomicUsize::new(0));
@@ -157,7 +157,7 @@ fn accept_loop(
                     continue;
                 }
                 live.fetch_add(1, Ordering::SeqCst);
-                let spawned = spawn_connection(stream, config, dispatcher, audit, &live);
+                let spawned = spawn_connection(stream, config, dispatcher, observer, &live);
                 match spawned {
                     Ok(handle) => threads.push(handle),
                     Err(_) => {
@@ -179,17 +179,17 @@ fn spawn_connection(
     stream: UnixStream,
     config: &BrokerConfig,
     dispatcher: &Arc<Dispatcher>,
-    audit: &Arc<dyn AuditSink>,
+    observer: &Arc<dyn ObservationSink>,
     live: &Arc<AtomicUsize>,
 ) -> io::Result<JoinHandle<()>> {
-    let audit = Arc::clone(audit);
+    let observer = Arc::clone(observer);
     let dispatcher = Arc::clone(dispatcher);
     let config = config.clone();
     let live = Arc::clone(live);
     std::thread::Builder::new()
         .name("broker-conn".to_owned())
         .spawn(move || {
-            serve_connection(stream, &config, &dispatcher, audit.as_ref());
+            serve_connection(stream, &config, &dispatcher, observer.as_ref());
             live.fetch_sub(1, Ordering::SeqCst);
         })
 }
@@ -198,7 +198,7 @@ fn serve_connection(
     mut stream: UnixStream,
     config: &BrokerConfig,
     dispatcher: &Dispatcher,
-    audit: &dyn AuditSink,
+    observer: &dyn ObservationSink,
 ) {
     let Ok(peer) = peer_credentials(&stream) else {
         return;
@@ -206,7 +206,7 @@ fn serve_connection(
     if !peer_uid_allowed(peer, config) {
         // The channel itself is not permitted. Nothing is read from it: an
         // unauthorized peer must not get to feed the parser at all.
-        audit.record(AuditRecord::rejected(
+        observer.record(CallObservation::rejected(
             peer,
             ErrorCode::Unauthenticated,
             "peer_uid_denied",
@@ -224,14 +224,14 @@ fn serve_connection(
         match read_frame(&mut stream, MAX_FRAME_BYTES) {
             Ok(body) => {
                 served = served.saturating_add(1);
-                let response = dispatcher.handle_frame(&body, peer, audit);
+                let response = dispatcher.handle_frame(&body, peer, observer);
                 if write_response(&mut stream, &response).is_err() {
                     return;
                 }
             }
             Err(FrameError::ZeroLength) => {
                 // Position is still known: answer and keep the connection.
-                audit.record(AuditRecord::rejected(
+                observer.record(CallObservation::rejected(
                     peer,
                     ErrorCode::InvalidRequest,
                     "zero_length_frame",
@@ -243,7 +243,7 @@ fn serve_connection(
                 }
             }
             Err(err @ FrameError::Oversize { .. }) => {
-                audit.record(AuditRecord::rejected(
+                observer.record(CallObservation::rejected(
                     peer,
                     ErrorCode::InvalidRequest,
                     "oversize_frame",

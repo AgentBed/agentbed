@@ -17,11 +17,11 @@
 )]
 
 use agentbed_broker::adapter::UnresolvedAdapter;
-use agentbed_broker::audit::{AuditRecord, CollectingAudit};
 use agentbed_broker::config::BrokerConfig;
 use agentbed_broker::dispatch::Dispatcher;
 use agentbed_broker::identity::{Enrollment, TokenStore};
 use agentbed_broker::manifest::ManifestStore;
+use agentbed_broker::observability::{CallObservation, CollectingObserver};
 use agentbed_broker::server::Server;
 use agentbed_protocol::frame::{read_frame, write_frame, MAX_FRAME_BYTES};
 use agentbed_protocol::wire::Response;
@@ -53,7 +53,7 @@ pub const IO_TIMEOUT: Duration = Duration::from_secs(5);
 /// A running broker plus its scratch directory.
 pub struct Harness {
     server: Server,
-    audit: CollectingAudit,
+    audit: CollectingObserver,
     dir: PathBuf,
 }
 
@@ -62,6 +62,11 @@ impl Harness {
     /// (allowed), `TOKEN_B` -> `AGENT_B` (manifest denies at stage 3), and
     /// `TOKEN_REVOKED` -> a revoked credential for `AGENT_A`.
     pub fn start() -> Harness {
+        Self::start_with(|_| {})
+    }
+
+    /// Start a broker, letting the caller adjust the configuration first.
+    pub fn start_with(customize: impl FnOnce(&mut BrokerConfig)) -> Harness {
         let dir = scratch_dir();
         let enrol = |agent: &str, manifest: &str, token: &str, revoked: bool| Enrollment {
             agent_id: agent.to_owned(),
@@ -87,14 +92,15 @@ impl Harness {
         ])
         .expect("token store");
 
-        let config = BrokerConfig {
+        let mut config = BrokerConfig {
             socket_path: dir.join("broker.sock"),
             manifest_dir: Some(manifest_dir()),
             read_timeout: IO_TIMEOUT,
             write_timeout: IO_TIMEOUT,
             ..BrokerConfig::default()
         };
-        let audit = CollectingAudit::default();
+        customize(&mut config);
+        let audit = CollectingObserver::default();
         let dispatcher = Arc::new(Dispatcher::new(
             tokens,
             ManifestStore::new(manifest_dir()),
@@ -103,6 +109,18 @@ impl Harness {
         let server = Server::start(&config, dispatcher, Arc::new(audit.clone()))
             .expect("broker binds its socket");
         Harness { server, audit, dir }
+    }
+
+    /// A broker that admits only a uid this process does not have, so a
+    /// connection from these tests is refused on peer credentials.
+    pub fn start_allowing_foreign_peer_uid() -> Harness {
+        // SAFETY: getuid() cannot fail and touches no memory.
+        #[allow(unsafe_code)]
+        let own = unsafe { libc::getuid() };
+        Self::start_with(|config| {
+            // Any uid but ours. Wrapping keeps this valid when running as root.
+            config.allowed_peer_uids = vec![own.wrapping_add(1)];
+        })
     }
 
     pub fn socket_path(&self) -> &Path {
@@ -122,12 +140,12 @@ impl Harness {
         stream
     }
 
-    pub fn audit_records(&self) -> Vec<AuditRecord> {
+    pub fn audit_records(&self) -> Vec<CallObservation> {
         self.audit.records()
     }
 
     /// Wait until the broker has recorded at least `n` audit records, bounded.
-    pub fn wait_for_records(&self, n: usize) -> Vec<AuditRecord> {
+    pub fn wait_for_records(&self, n: usize) -> Vec<CallObservation> {
         let deadline = Instant::now() + IO_TIMEOUT;
         loop {
             let records = self.audit.records();
