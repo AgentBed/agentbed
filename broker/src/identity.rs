@@ -212,10 +212,11 @@ impl TokenStore {
 }
 
 fn now_unix() -> u64 {
+    // A clock before the epoch reads as "maximally late", so an entry with an
+    // expiry is treated as expired rather than as valid.
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(u64::MAX)
+        .map_or(u64::MAX, |d| d.as_secs())
 }
 
 fn decode_hex32(raw: &str) -> Option<[u8; 32]> {
