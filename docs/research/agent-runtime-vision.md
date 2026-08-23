@@ -5,7 +5,7 @@
 **Owner:** L-P
 **Positioning decision:** the agent hierarchy described here is a **sibling runtime project**, not part of Agentbed. It is an *optional* runtime for users who do not already run Hermes, OpenClaw, Claude Code or ChatGPT; those users remain the primary audience and connect their own agent over MCP. This project is **not scheduled before the Agentbed MCP layer (Gates 0–3+) is stable.** It exists now only to (a) record the vision while it is fresh and (b) extract the few requirements it imposes on Agentbed's MCP surface, which are cheap to bake in early and expensive to retrofit (§6).
 
-Working name in this note: **the runtime**. (Naming TBD; must not collide with Agentbed itself.)
+Name: **AgentBed Staff** (decided 2026-08-23, round 2) — first-party family branding: "install AgentBed, add Staff if you don't have your own agent." "The runtime" below refers to AgentBed Staff.
 
 ---
 
@@ -51,16 +51,61 @@ Until the runtime exists, Claude Code sessions remain the de facto orchestrator 
 4. Effects: data pulls are R; report generation M; nothing E → no approval needed. If a worker proposes pausing a campaign, that's E and outside the reporting project's pre-auth → question into the queue → comm agent raises it at the next conversational beat.
 5. Completion event → queue → comm agent: "Your ads report is ready — 12 accounts, two need attention. Want the summary now?"
 
-## 5. Open questions (next brainstorm)
+## 5. Second-round decisions (2026-08-23, round 2)
 
-- **Naming** the runtime project.
-- **Build vs assemble:** custom engine vs building on the Claude Agent SDK (whose orchestrator/subagent/skills model maps 1:1 onto tiers 3–4), vs Hermes/OpenClaw extension. Leaning SDK-based assembly; decide when the project is scheduled.
-- **Interjection policy:** when may the comm agent proactively speak (task done, urgent question) vs wait for a conversational pause vs push to Telegram because no conversation is live?
-- **Model tiering table:** which model class per tier/stage, and the concrete escalation ladder (worker fails → retry same → bigger model → CoS).
-- **Independent review:** same model family as the worker or deliberately different? What artifact makes a review "passed"?
-- **Long-memory recall:** what the comm agent reads to discuss a 3-month-old project in <1 s — per-project `SUMMARY.md` maintained by the CoS? An index? Embeddings are *not* assumed.
-- **Heartbeat cadence** for CoS supervision sweeps, and staleness thresholds per project class.
-- **Multi-user later?** v1 is single-owner; the queue/approval model assumes one human.
+The open questions from the first draft are resolved as follows. Items marked *(proposed default)* were delegated to the assistant and stand until the owner vetoes them.
+
+### 5.1 Name — **AgentBed Staff**
+
+First-party family branding. Positioning line: "Install AgentBed; add Staff if you don't already run an agent."
+
+### 5.2 Engine — DSH lead candidate; final call deferred
+
+Four candidates were evaluated (web sweep, 2026-08-23):
+
+| Candidate | Fit | Concerns |
+|---|---|---|
+| **DeepSeek Harness (DSH)** — MIT, "everything is a plugin" on the Cordis composition framework | **Best architectural fit.** Provider-agnostic model adapters (G6); sessions are an append-only event log — exactly §2.3's state backbone; durable/forkable/resumable sessions match §2.4's wake-rehydrate-exit model; experimental "Agent Teams" (durable roster, task board, mailbox over continuable subagents) mirrors the CoS/queue design | Developer preview, breaking changes expected; sandboxing limited to filesystem (irrelevant here — AgentBed is the sandbox); no published benchmarks |
+| **OpenAI Agents SDK** — open-source, production-proven | Handoffs, guardrails, sessions (Redis-backed), tracing, sandbox agents; model-agnostic via LiteLLM | Handoff-centric shape fits tiers 2–3 less naturally than a task-board model; heavier coupling to OpenAI conventions |
+| **Vercel AI SDK** | Excellent realtime/streaming front-end plumbing — a candidate for the **comm agent's** voice/UI layer specifically | Single-agent native; its own guidance says to pair with Mastra/LangGraph for multi-agent — not an orchestration engine |
+| **Claude Agent SDK** | Most mature runtime; subagents, skills, deepest MCP client support | Claude-models-only as the engine — breaks G6 for a runtime meant for users without their own agent stack |
+
+**Decision:** DSH is the lead candidate and the OpenAI Agents SDK the fallback; the final call is made when Staff is actually scheduled, once DSH's preview status has resolved either way. Until then every Staff contract (task briefs, event-log schema, manifests, queue semantics) is written engine-agnostic. The Vercel AI SDK remains in the picture only as a possible comm-agent front-end.
+
+### 5.3 Interjection policy — urgency-tiered
+
+- **Urgent** (blocking failure, approval about to expire, hard deadline at risk): the comm agent interjects politely even mid-topic.
+- **Normal** (task complete, non-blocking question): waits for a conversational pause.
+- **Low** (FYI, progress notes): daily digest, or on request.
+- **No live conversation:** urgent → Telegram push; everything else queues for the next session and the digest.
+
+### 5.4 Model tiering and escalation ladder *(proposed default)*
+
+| Tier / role | Model class |
+|---|---|
+| Comm agent | Realtime voice model (cloud, v1) |
+| Chief of Staff | Frontier reasoning model with vision |
+| Orchestrators | Mid-tier reasoning model |
+| Workers | Cheapest model that passes review for that skill; orchestrator may pin a higher class for known-hard skills |
+| Reviewers | At least one class above the worker under review, **or** a different model family at the same class |
+
+Escalation ladder on worker failure: retry same model once (fresh context) → escalate one model class once → orchestrator replans the decomposition → escalate to CoS → CoS asks the owner. Each rung logged; each task carries a token/$ cap set by the orchestrator from the project budget, and blowing the cap is itself an escalation, never a silent overrun.
+
+### 5.5 Independent review — risk-based scope, diverse reviewer
+
+Mandatory independent review for anything **user-facing** (reports, drafts, deliverables) and anything **feeding an E-effect** (an email to be sent, a bid-change payload). Internal intermediate artifacts get orchestrator spot-checks only. Two protocol rules *(proposed default)*: the definition-of-done is written into the task brief **before** work starts and the reviewer checks against it, not against taste; the review verdict (pass/fail + findings) is a logged event, and a task is only `complete` with a passing review attached where review is mandatory.
+
+### 5.6 Long-memory recall *(proposed default)*
+
+No embeddings at this scale. The CoS maintains two rendered views: a global `INDEX.md` (one line per project: status, last activity, next milestone — small enough for the comm agent to always hold) and a per-project `SUMMARY.md` (rolling, updated on every significant event). "Tell me about the March client project" = read `SUMMARY.md`, sub-second. Anything deeper is a grep/log query.
+
+### 5.7 Heartbeat cadence *(proposed default)*
+
+CoS supervision sweeps are cron events over the log: **active** projects every 4 h (expect movement daily), **waiting-on-external** daily, **dormant** weekly. Explicit per-task deadlines override the sweep with their own timers. A stale finding wakes the responsible orchestrator first; only unresolved staleness surfaces to the owner.
+
+### 5.8 Multi-user — single-owner v1, identities designed in
+
+v1 serves exactly one owner — no roles, no per-person approval authority. But every log event, queue entry and approval record carries a `principal` field from day one, so multi-user later is a permissions feature, not a schema migration.
 
 ## 6. What this imposes on Agentbed *now* (requirements to carry into Gates 1–3 design)
 
