@@ -1,0 +1,48 @@
+name: Review finding
+description: Attack the design or the spike code — the project's front door (see docs/REVIEW.md).
+title: "[review] <area>: <one-line claim>"
+labels: ["review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One issue per finding. Severity first; no praise needed.
+        Read `docs/REVIEW.md` for what we want challenged.
+        **Exploitable in shipped code? Use private reporting instead — see SECURITY.md.**
+  - type: input
+    id: section
+    attributes:
+      label: Document section or code location
+      description: e.g. `ADR-001 §5.2`, `effects.md §3b`, `broker/src/policy.rs:120`
+    validations:
+      required: true
+  - type: textarea
+    id: claim
+    attributes:
+      label: What is wrong or missing
+      description: The claim, stated so it can be falsified.
+    validations:
+      required: true
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Concrete failure scenario
+      description: The sequence of events in which this bites — who does what, and what breaks.
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: The fix you would make
+      description: Optional but valuable — what you would change in the document or code.
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Blocks a gate exit condition
+        - Weakens an enforcement or honesty claim
+        - Inconsistency between documents
+        - Minor / editorial
+    validations:
+      required: true
