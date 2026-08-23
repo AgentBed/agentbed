@@ -23,7 +23,10 @@ pub mod audit;
 pub mod config;
 pub mod dispatch;
 pub mod identity;
+pub mod manifest;
 pub mod peercred;
+pub mod policy;
+pub mod safety;
 pub mod server;
 
 pub use config::BrokerConfig;
