@@ -27,10 +27,10 @@
 //!    the ladder, so there is no window between "may proceed" and "counted".
 
 use crate::adapter::HostAdapter;
-use crate::audit::{AuditRecord, AuditSink};
 use crate::digest::OperationDigest;
 use crate::identity::{AgentContext, TokenStore};
 use crate::manifest::ManifestStore;
+use crate::observability::{CallObservation, ObservationSink};
 use crate::peercred::PeerCredentials;
 use crate::policy::{evaluate, CallAdmission, Decision};
 use crate::quota::QuotaLedger;
@@ -82,17 +82,17 @@ impl Dispatcher {
         &self,
         body: &[u8],
         peer: PeerCredentials,
-        audit: &dyn AuditSink,
+        observer: &dyn ObservationSink,
     ) -> Response {
-        let Some(request) = Self::parse(body, peer, audit) else {
+        let Some(request) = Self::parse(body, peer, observer) else {
             return Response::failed(None, ResponseError::new(ErrorCode::InvalidRequest));
         };
 
         let Ok(agent) = self.tokens.resolve(request.auth.token.expose()) else {
-            audit.record(AuditRecord {
+            observer.record(CallObservation {
                 request_id: Some(request.id.to_string()),
                 op: Some(request.op.as_str()),
-                ..AuditRecord::rejected(peer, ErrorCode::Unauthenticated, "token_not_resolved")
+                ..CallObservation::rejected(peer, ErrorCode::Unauthenticated, "token_not_resolved")
             });
             return Response::failed(
                 Some(request.id),
@@ -101,7 +101,28 @@ impl Dispatcher {
         };
 
         match request.op {
-            OpName::SystemInfo => self.system_info(&request, &agent, peer, audit),
+            OpName::SystemInfo => {
+                // The operation's own version, distinct from the protocol
+                // version and part of the digest input. An unsupported one is
+                // refused rather than reinterpreted as the version we know.
+                if request.op_version != system_info::VERSION {
+                    observer.record(CallObservation {
+                        request_id: Some(request.id.to_string()),
+                        agent_id: Some(agent.agent_id().to_owned()),
+                        op: Some(request.op.as_str()),
+                        ..CallObservation::rejected(
+                            peer,
+                            ErrorCode::UnsupportedOperation,
+                            "unsupported_operation_version",
+                        )
+                    });
+                    return Response::failed(
+                        Some(request.id),
+                        ResponseError::new(ErrorCode::UnsupportedOperation),
+                    );
+                }
+                self.system_info(&request, &agent, peer, observer)
+            }
         }
     }
 
@@ -110,7 +131,7 @@ impl Dispatcher {
         request: &Request,
         agent: &AgentContext,
         peer: PeerCredentials,
-        audit: &dyn AuditSink,
+        observer: &dyn ObservationSink,
     ) -> Response {
         let id = request.id.clone();
 
@@ -119,7 +140,7 @@ impl Dispatcher {
         let operation_digest = match Self::project_and_digest(request) {
             Ok(digest) => digest,
             Err((error, reason)) => {
-                return Self::refuse(&id, agent, peer, audit, error, reason, None)
+                return Self::refuse(&id, agent, peer, observer, error, reason, None)
             }
         };
 
@@ -131,7 +152,7 @@ impl Dispatcher {
                 &id,
                 agent,
                 peer,
-                audit,
+                observer,
                 ResponseError::new(ErrorCode::Denied),
                 "manifest_unavailable",
                 Some(operation_digest),
@@ -154,7 +175,7 @@ impl Dispatcher {
                 stage,
                 reason,
             } => {
-                audit.record(AuditRecord {
+                observer.record(CallObservation {
                     request_id: Some(id.to_string()),
                     agent_id: Some(agent.agent_id().to_owned()),
                     peer,
@@ -180,7 +201,7 @@ impl Dispatcher {
                     effect_set: call.effect_set.clone(),
                     operation_digest: operation_digest.clone(),
                 };
-                audit.record(AuditRecord {
+                observer.record(CallObservation {
                     request_id: Some(id.to_string()),
                     agent_id: Some(agent.agent_id().to_owned()),
                     peer,
@@ -248,12 +269,12 @@ impl Dispatcher {
         id: &RequestId,
         agent: &AgentContext,
         peer: PeerCredentials,
-        audit: &dyn AuditSink,
+        observer: &dyn ObservationSink,
         error: ResponseError,
         reason: &'static str,
         operation_digest: Option<Digest>,
     ) -> Response {
-        audit.record(AuditRecord {
+        observer.record(CallObservation {
             request_id: Some(id.to_string()),
             agent_id: Some(agent.agent_id().to_owned()),
             peer,
@@ -271,9 +292,13 @@ impl Dispatcher {
 
     /// Strict parse plus version check. Returns `None` when the frame is not a
     /// well-formed request, having already recorded why.
-    fn parse(body: &[u8], peer: PeerCredentials, audit: &dyn AuditSink) -> Option<Request> {
+    fn parse(
+        body: &[u8],
+        peer: PeerCredentials,
+        observer: &dyn ObservationSink,
+    ) -> Option<Request> {
         let Ok(value) = strict::parse(body) else {
-            audit.record(AuditRecord::rejected(
+            observer.record(CallObservation::rejected(
                 peer,
                 ErrorCode::InvalidRequest,
                 "malformed_json",
@@ -283,7 +308,7 @@ impl Dispatcher {
         // Covers unknown fields (an asserted agent_id lands here), unknown
         // operations, and malformed envelopes alike.
         let Ok(request) = serde_json::from_value::<Request>(value) else {
-            audit.record(AuditRecord::rejected(
+            observer.record(CallObservation::rejected(
                 peer,
                 ErrorCode::InvalidRequest,
                 "envelope_rejected",
@@ -291,7 +316,7 @@ impl Dispatcher {
             return None;
         };
         if !request.version_supported() {
-            audit.record(AuditRecord::rejected(
+            observer.record(CallObservation::rejected(
                 peer,
                 ErrorCode::InvalidRequest,
                 "unsupported_protocol_version",

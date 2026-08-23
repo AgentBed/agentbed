@@ -144,11 +144,24 @@ pub struct Request {
     pub id: RequestId,
     /// Which operation.
     pub op: OpName,
+    /// Version of that operation's own contract (`docs/protocol.md` §2).
+    ///
+    /// Absent means 1. Within protocol v1 every operation is at version 1, so
+    /// requiring the field would add one with a single legal value; having it
+    /// at all means a future operation revision is *refusable* rather than
+    /// silently reinterpreted, and it is part of the digest input.
+    #[serde(default = "default_op_version")]
+    pub op_version: u32,
     /// Caller credential.
     pub auth: Auth,
     /// Operation parameters, typed by the broker per `op`.
     #[serde(default)]
     pub params: serde_json::Value,
+}
+
+/// Operation version assumed when the field is absent.
+fn default_op_version() -> u32 {
+    1
 }
 
 impl Request {
@@ -177,6 +190,10 @@ pub enum ErrorCode {
     /// The call requires an approval that does not exist. Approvals land at
     /// Gate 2; at Gate 0 this is a terminal refusal, never a prompt.
     ApprovalRequired,
+    /// The operation exists but the requested `op_version` is not one this
+    /// broker implements. Refused rather than reinterpreted as a version it
+    /// does know (`docs/protocol.md` §2).
+    UnsupportedOperation,
     /// Broker-side failure. Never carries detail.
     Internal,
 }
@@ -349,6 +366,36 @@ mod tests {
     }
 
     const VALID: &str = r#"{"v":1,"id":"01J","op":"system.info","auth":{"token":"t"},"params":{}}"#;
+
+    #[test]
+    fn operation_version_defaults_to_one_and_is_typed() {
+        let req = parse_request(VALID).unwrap();
+        assert_eq!(req.op_version, 1, "an absent op_version means version 1");
+
+        let explicit = parse_request(
+            r#"{"v":1,"id":"01J","op":"system.info","op_version":1,"auth":{"token":"t"},"params":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(explicit.op_version, 1);
+
+        // A version the broker will refuse still has to *parse*, so the refusal
+        // is a policy answer with a proper error code rather than a parse error.
+        let future = parse_request(
+            r#"{"v":1,"id":"01J","op":"system.info","op_version":2,"auth":{"token":"t"},"params":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(future.op_version, 2);
+
+        for bad in ["\"1\"", "null", "-1", "1.5"] {
+            let raw = format!(
+                r#"{{"v":1,"id":"01J","op":"system.info","op_version":{bad},"auth":{{"token":"t"}},"params":{{}}}}"#
+            );
+            assert!(
+                parse_request(&raw).is_err(),
+                "op_version {bad} must not parse"
+            );
+        }
+    }
 
     #[test]
     fn accepts_a_well_formed_request() {

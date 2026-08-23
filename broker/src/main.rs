@@ -5,11 +5,11 @@
 //! `DynamicUser` come with Gate 1.
 
 use agentbed_broker::adapter::UnresolvedAdapter;
-use agentbed_broker::audit::{AuditSink, StderrAudit};
 use agentbed_broker::config::BrokerConfig;
 use agentbed_broker::dispatch::Dispatcher;
 use agentbed_broker::identity::TokenStore;
 use agentbed_broker::manifest::ManifestStore;
+use agentbed_broker::observability::{ObservationSink, StderrObserver};
 use agentbed_broker::server::Server;
 use agentbed_broker::signals;
 use std::path::PathBuf;
@@ -72,7 +72,7 @@ fn run() -> Result<(), String> {
         .clone()
         .ok_or_else(|| format!("--manifests is required\n\n{USAGE}"))?;
 
-    let audit: Arc<dyn AuditSink> = Arc::new(StderrAudit);
+    let observer: Arc<dyn ObservationSink> = Arc::new(StderrObserver);
     let dispatcher = Arc::new(Dispatcher::new(
         tokens,
         ManifestStore::new(manifest_dir),
@@ -80,7 +80,7 @@ fn run() -> Result<(), String> {
         // and every D/M step would be refused. The Nix adapter lands at Gate 1.
         Box::new(UnresolvedAdapter),
     ));
-    let mut server = Server::start(&config, dispatcher, audit).map_err(|e| e.to_string())?;
+    let mut server = Server::start(&config, dispatcher, observer).map_err(|e| e.to_string())?;
     eprintln!(
         "agentbed-broker: listening on {}",
         server.socket_path().display()

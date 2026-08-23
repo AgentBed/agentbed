@@ -19,12 +19,12 @@ Per-binary:
 
 | Test binary | Tests | Covers |
 |---|---|---|
-| `agentbed-protocol` (unit) | 22 | framing, strict JSON, envelope shape, digests |
-| `proto/tests/jcs_conformance.rs` | 5 | RFC 8785 vectors, UTF-16 key order, ECMAScript number forms |
+| `agentbed-protocol` (unit) | 23 | framing, strict JSON, envelope shape, digest rendering |
+| `broker/tests/jcs_conformance.rs` | 7 | RFC 8785 fixtures (byte-for-byte), ECMAScript number forms, Agentbed digest vectors and domain separation |
 | `agentbed-schemas/tests/examples_validate.rs` | 10 | every shipped example validates; footprint/glob/approval-channel/out-of-bounds negatives |
-| `agentbed-broker` (unit) | 31 | identity, policy ladder (all five stages), safety order, quota, adapter, host probe |
-| `broker/tests/transport.rs` | 6 | socket permissions, peer credentials, per-frame fail-closed rules |
-| `broker/tests/system_info.rs` | 7 | served call, binding, schema conformance, stage-3 denial, quota veto |
+| `agentbed-broker` (unit) | 37 | identity, policy ladder (all five stages), safety order, quota, adapter, host probe |
+| `broker/tests/transport.rs` | 8 | socket permissions, peer credentials (allowed *and* denied uid), redaction, per-frame fail-closed rules |
+| `broker/tests/system_info.rs` | 9 | served call, binding, schema conformance, stage-3 denial, quota veto, operation-version default and refusal |
 | `broker/tests/quota_concurrency.rs` | 2 | stage 5 under concurrent callers at the budget boundary |
 | **`broker/tests/forged_gateway.rs`** | **7** | **Gate 0 exit test (a)** |
 | **`broker/tests/rpc_fuzz_smoke.rs`** | **1** | **Gate 0 exit test (b)** — one function, many cases (see below) |

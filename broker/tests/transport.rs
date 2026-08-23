@@ -127,3 +127,60 @@ fn unsafe_getuid() -> u32 {
         libc::getuid()
     }
 }
+
+#[test]
+fn a_peer_uid_outside_the_allow_list_is_dropped_before_a_byte_is_read() {
+    // Peer credentials gate *the channel*: which local process may talk to the
+    // broker at all. This is the other half of the forged-gateway property —
+    // that suite shows a valid peer credential authorizes nothing, and this one
+    // shows an invalid one is refused before the parser ever sees input.
+    //
+    // The harness allows a uid this process does not have, so the connection is
+    // rejected on credentials rather than on anything in the frame.
+    let harness = Harness::start_allowing_foreign_peer_uid();
+    let before = harness.audit_records().len();
+
+    let mut stream = harness.connect();
+    // A perfectly valid, authorized request. It must still get nothing.
+    send_frame(&mut stream, &request_body("01J-foreign", TOKEN_A));
+
+    assert_closed_without_response(&mut stream);
+
+    let records = harness.wait_for_records(before + 1);
+    let last = records.last().expect("the refusal is observed");
+    assert_eq!(last.reason, "peer_uid_denied");
+    assert!(
+        last.agent_id.is_none(),
+        "no identity is resolved for a rejected channel"
+    );
+    assert!(!last.allowed);
+    assert!(
+        last.op.is_none(),
+        "nothing was parsed, so no operation may be attributed to the attempt"
+    );
+}
+
+#[test]
+fn no_credential_material_reaches_an_observation() {
+    // Gate 0 observability is redacted by construction: Token's Debug is
+    // redacted at the protocol layer, and observations carry the *resolved*
+    // identity rather than the credential that produced it. This asserts the
+    // property end to end rather than trusting the type.
+    let harness = Harness::start();
+    let mut stream = harness.connect();
+    send_frame(&mut stream, &request_body("01J-redact", TOKEN_A));
+    let _ = read_response(&mut stream).expect("a response");
+
+    // And an unauthenticated attempt, where the token is present but unknown.
+    let mut other = harness.connect();
+    send_frame(&mut other, &request_body("01J-redact-bad", TOKEN_UNKNOWN));
+    let _ = read_response(&mut other).expect("a response");
+
+    for record in harness.wait_for_records(2) {
+        let rendered = format!("{record:?}");
+        assert!(
+            !rendered.contains(TOKEN_A) && !rendered.contains(TOKEN_UNKNOWN),
+            "an observation must never carry credential material: {rendered}"
+        );
+    }
+}

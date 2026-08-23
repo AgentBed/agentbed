@@ -158,3 +158,59 @@ fn quota_exhaustion_vetoes_an_otherwise_allowed_read() {
     assert_eq!(error.code, ErrorCode::QuotaExhausted);
     assert_eq!(error.stage, Some(DecisionStage::Quota));
 }
+
+#[test]
+fn an_absent_operation_version_means_version_one() {
+    // docs/protocol.md §2: within protocol v1 every operation is at version 1,
+    // so omitting the field is legal and means 1 — while a version the broker
+    // does not implement is refused rather than reinterpreted as one it does.
+    let harness = Harness::start();
+
+    let mut stream = harness.connect();
+    let omitted = format!(
+        r#"{{"v":1,"id":"01J-omit","op":"system.info","auth":{{"token":"{TOKEN_A}"}},"params":{{}}}}"#
+    );
+    send_frame(&mut stream, omitted.as_bytes());
+    let response = read_response(&mut stream).expect("a response");
+    assert!(
+        response.error.is_none(),
+        "an omitted op_version must be accepted as 1"
+    );
+
+    let mut explicit = harness.connect();
+    let stated = format!(
+        r#"{{"v":1,"id":"01J-explicit","op":"system.info","op_version":1,"auth":{{"token":"{TOKEN_A}"}},"params":{{}}}}"#
+    );
+    send_frame(&mut explicit, stated.as_bytes());
+    let stated_response = read_response(&mut explicit).expect("a response");
+    assert!(stated_response.error.is_none());
+
+    // The two must agree on the digest: the default is the same value, not a
+    // separate code path.
+    assert_eq!(
+        response.binding.expect("binding").operation_digest,
+        stated_response.binding.expect("binding").operation_digest
+    );
+}
+
+#[test]
+fn an_unsupported_operation_version_is_refused_not_reinterpreted() {
+    let harness = Harness::start();
+    let mut stream = harness.connect();
+    let future = format!(
+        r#"{{"v":1,"id":"01J-v2","op":"system.info","op_version":2,"auth":{{"token":"{TOKEN_A}"}},"params":{{}}}}"#
+    );
+    send_frame(&mut stream, future.as_bytes());
+
+    let response = read_response(&mut stream).expect("a response");
+    let error = response.error.expect("a refusal");
+    assert_eq!(error.code, ErrorCode::UnsupportedOperation);
+    assert!(
+        response.result.is_none(),
+        "an unknown operation version must not execute"
+    );
+    assert!(
+        error.stage.is_none(),
+        "this is a contract refusal, not a policy stage"
+    );
+}
