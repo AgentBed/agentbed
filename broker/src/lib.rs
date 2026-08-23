@@ -31,6 +31,7 @@ pub mod policy;
 pub mod quota;
 pub mod safety;
 pub mod server;
+pub mod signals;
 pub mod tools;
 
 pub use config::BrokerConfig;

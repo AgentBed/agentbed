@@ -11,6 +11,7 @@ use agentbed_broker::dispatch::Dispatcher;
 use agentbed_broker::identity::TokenStore;
 use agentbed_broker::manifest::ManifestStore;
 use agentbed_broker::server::Server;
+use agentbed_broker::signals;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -27,6 +28,10 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
+    // Before any thread exists, so every thread inherits the block and the
+    // signal is handled in exactly one place.
+    signals::block_termination_signals()?;
+
     let mut config = BrokerConfig::default();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -81,7 +86,8 @@ fn run() -> Result<(), String> {
         server.socket_path().display()
     );
 
-    wait_for_signal();
+    signals::wait_for_termination();
+    eprintln!("agentbed-broker: shutting down");
     server.shutdown(Duration::from_secs(5));
     Ok(())
 }
@@ -92,15 +98,4 @@ const USAGE: &str = "usage: agentbed-broker --tokens <file> --manifests <dir> \
 fn next_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     args.next()
         .ok_or_else(|| format!("{flag} requires a value"))
-}
-
-/// Block until the process is asked to stop.
-///
-/// Gate 0 has no signal handling beyond "the supervisor kills us": reading
-/// stdin to EOF is enough for a spike run under a terminal or a unit with
-/// `StandardInput=null`, and it avoids installing a handler whose interaction
-/// with the transaction engine has not been designed yet.
-fn wait_for_signal() {
-    let mut sink = String::new();
-    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut sink);
 }
