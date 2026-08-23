@@ -15,10 +15,12 @@
 //!    channel), not the frame (it has no field to consult).
 //! 3. **Load the manifest here** and compute its digest, because the gateway is
 //!    untrusted by the broker (`docs/threat-model.md`, boundary 2).
-//! 4. **Project the operation through its schema**, then canonicalize *that*
-//!    projection (RFC 8785) and digest it. The bytes the ledger and approvals
-//!    bind are produced here, from the validated typed operation — never from
-//!    the caller's serialization and never re-serialized later
+//! 4. **Project the operation through its schema**, then build the digest over
+//!    that projection using the construction frozen in `docs/protocol.md` §4:
+//!    `SHA-256(domain || JCS({operation, operation_version, arguments}))`. The
+//!    bytes an approval or ledger record binds are produced here, from the
+//!    validated typed operation — never from the caller's serialization, never
+//!    accepted from the gateway, and never re-serialized later
 //!    (`docs/effects.md` §1).
 //! 5. **Compute the effect set and evaluate the ladder** (`policy`).
 //! 6. Execute only if the ladder allowed. Stage 5 admits atomically inside
@@ -26,20 +28,20 @@
 
 use crate::adapter::HostAdapter;
 use crate::audit::{AuditRecord, AuditSink};
+use crate::digest::OperationDigest;
 use crate::identity::{AgentContext, TokenStore};
 use crate::manifest::ManifestStore;
 use crate::peercred::PeerCredentials;
 use crate::policy::{evaluate, CallAdmission, Decision};
 use crate::quota::QuotaLedger;
 use crate::tools::system_info;
-use agentbed_protocol::digest::{CanonicalDigest, Digest};
+use agentbed_protocol::digest::Digest;
 use agentbed_protocol::strict;
 use agentbed_protocol::wire::{
     CallBinding, EffectClass, ErrorCode, OpName, OperationResult, Request, RequestId, Response,
     ResponseError, SystemInfoParams,
 };
 use agentbed_schemas::{validate, SchemaKind};
-use serde_json::json;
 
 /// Everything the request path needs, assembled once at startup.
 pub struct Dispatcher {
@@ -229,13 +231,13 @@ impl Dispatcher {
             )
         })?;
 
-        let canonical_operation = json!({ "op": system_info::OP, "params": projected });
-        let canonical = CanonicalDigest::of(&canonical_operation).map_err(|_| {
-            (
-                ResponseError::new(ErrorCode::Internal),
-                "operation_not_canonicalizable",
-            )
-        })?;
+        let canonical = OperationDigest::of(system_info::OP, system_info::VERSION, &projected)
+            .map_err(|_| {
+                (
+                    ResponseError::new(ErrorCode::Internal),
+                    "operation_not_canonicalizable",
+                )
+            })?;
         Ok(canonical.digest().clone())
     }
 

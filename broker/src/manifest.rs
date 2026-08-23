@@ -10,9 +10,10 @@
 //! so it must be computed the same way everywhere — canonicalize once, hash the
 //! canonical bytes, never re-serialize.
 
+use crate::digest::manifest_digest;
 use crate::policy::OperationPolicy;
 use crate::safety::MinSafety;
-use agentbed_protocol::digest::{CanonicalDigest, Digest};
+use agentbed_protocol::digest::Digest;
 use agentbed_protocol::wire::EffectClass;
 use agentbed_schemas::{manifest_kind, validate, yaml_to_json, SchemaKind};
 use serde::Deserialize;
@@ -198,12 +199,12 @@ pub fn load_agent_manifest(path: &Path) -> Result<AgentManifest, ManifestError> 
 
     semantic_checks(&capabilities)?;
 
-    let canonical = CanonicalDigest::of(&value)
+    let digest = manifest_digest(&value)
         .map_err(|e| ManifestError::Invalid(format!("manifest does not canonicalize: {e}")))?;
 
     Ok(AgentManifest {
         name,
-        digest: canonical.digest().clone(),
+        digest,
         capabilities,
     })
 }

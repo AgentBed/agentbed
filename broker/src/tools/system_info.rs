@@ -12,6 +12,13 @@ use agentbed_protocol::dto::system_info::SystemInfo;
 /// The operation's wire name.
 pub const OP: &str = "system.info";
 
+/// The version of this operation's own contract (`docs/protocol.md` §2).
+///
+/// Distinct from the protocol version: the envelope could stay at v1 while an
+/// operation's arguments or result change shape. It enters the digest, so a
+/// future v2 with identical arguments cannot collide with v1.
+pub const VERSION: u32 = 1;
+
 /// The effect set for a `system.info` call.
 ///
 /// A function rather than a constant because `docs/effects.md` §1 computes the

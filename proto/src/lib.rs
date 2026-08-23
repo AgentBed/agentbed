@@ -21,7 +21,11 @@
 //! - agent identity resolution,
 //! - manifest loading or semantic validation,
 //! - effect-set computation, policy precedence, safety-vector checks, quotas,
-//! - audit writing, adapter behaviour, or MCP translation.
+//! - observability writing, adapter behaviour, or MCP translation,
+//! - **RFC 8785 canonicalization or digest computation.** Which bytes a digest
+//!   covers is a security decision (`docs/protocol.md` §4), so it lives with
+//!   the authority that enforces it. This crate can carry a digest on the wire
+//!   and reject a malformed one; it cannot produce one.
 //!
 //! All of those are the broker's, and the broker performs them on its own
 //! inputs. A gateway conclusion is never an input to a broker decision: see
@@ -37,13 +41,12 @@
 //!   non-interoperable numbers anywhere in the document.
 //! - [`wire`] — envelope DTOs, the closed operation enum, and the
 //!   machine-readable error / decision-stage enums.
-//! - [`jcs`] — RFC 8785 (JCS) canonicalization.
-//! - [`digest`] — versioned SHA-256 digest over canonical bytes.
+//! - [`digest`] — the wire *rendering* of a digest (`sha256:<hex>`): parse and
+//!   format only. Canonicalization and hashing are the broker's.
 
 pub mod digest;
 pub mod dto;
 pub mod frame;
-pub mod jcs;
 pub mod strict;
 pub mod wire;
 
