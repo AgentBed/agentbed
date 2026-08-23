@@ -20,7 +20,7 @@ use agentbed_broker::adapter::UnresolvedAdapter;
 use agentbed_broker::audit::{AuditRecord, CollectingAudit};
 use agentbed_broker::config::BrokerConfig;
 use agentbed_broker::dispatch::Dispatcher;
-use agentbed_broker::identity::TokenStore;
+use agentbed_broker::identity::{Enrollment, TokenStore};
 use agentbed_broker::manifest::ManifestStore;
 use agentbed_broker::server::Server;
 use agentbed_protocol::frame::{read_frame, write_frame, MAX_FRAME_BYTES};
@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 pub const TOKEN_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 pub const TOKEN_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 pub const TOKEN_UNKNOWN: &str = "cccccccccccccccccccccccccccccccc";
+pub const TOKEN_REVOKED: &str = "dddddddddddddddddddddddddddddddd";
 
 pub const AGENT_A: &str = "mcp-client:gate0-reader";
 pub const AGENT_B: &str = "mcp-client:denied-agent";
@@ -52,21 +53,26 @@ pub struct Harness {
 }
 
 impl Harness {
-    /// Start a broker whose token store maps `TOKEN_A` -> `AGENT_A` (allowed)
-    /// and `TOKEN_B` -> `AGENT_B` (manifest denies the operation at stage 3).
+    /// Start a broker whose token store enrols `TOKEN_A` -> `AGENT_A`
+    /// (allowed), `TOKEN_B` -> `AGENT_B` (manifest denies at stage 3), and
+    /// `TOKEN_REVOKED` -> a revoked credential for `AGENT_A`.
     pub fn start() -> Harness {
         let dir = scratch_dir();
-        let tokens = TokenStore::from_pairs([
-            (
-                AGENT_A.to_owned(),
-                "agent.reader.yaml".to_owned(),
-                TOKEN_A.to_owned(),
-            ),
-            (
-                AGENT_B.to_owned(),
-                "agent.denied.yaml".to_owned(),
-                TOKEN_B.to_owned(),
-            ),
+        let enrol = |agent: &str, manifest: &str, token: &str, revoked: bool| Enrollment {
+            agent_id: agent.to_owned(),
+            manifest_ref: manifest.to_owned(),
+            token: token.to_owned(),
+            revoked,
+            expires_at_unix: None,
+        };
+        let tokens = TokenStore::from_enrollments([
+            enrol(AGENT_A, "agent.reader.yaml", TOKEN_A, false),
+            enrol(AGENT_B, "agent.denied.yaml", TOKEN_B, false),
+            // A credential that was valid and no longer is. Revocation has to
+            // be enforced by the broker, so this is a real revoked entry — an
+            // absent one would make the revocation assertion pass for the
+            // wrong reason (unknown token, same wire error).
+            enrol(AGENT_A, "agent.reader.yaml", TOKEN_REVOKED, true),
         ])
         .expect("token store");
 

@@ -69,6 +69,21 @@ pub enum AuthError {
     Expired,
 }
 
+/// A credential to enroll.
+#[derive(Debug, Clone)]
+pub struct Enrollment {
+    /// Identity this token resolves to.
+    pub agent_id: String,
+    /// Manifest the identity is bound to.
+    pub manifest_ref: String,
+    /// The token itself.
+    pub token: String,
+    /// Whether the credential has been revoked.
+    pub revoked: bool,
+    /// Unix-seconds expiry, if any.
+    pub expires_at_unix: Option<u64>,
+}
+
 /// One enrolled credential.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -124,20 +139,34 @@ impl TokenStore {
     pub fn from_pairs(
         entries: impl IntoIterator<Item = (String, String, String)>,
     ) -> Result<Self, String> {
-        let mut by_hash = HashMap::new();
-        for (agent_id, manifest_ref, token) in entries {
-            if token.chars().count() < MIN_TOKEN_CHARS {
-                return Err(format!(
-                    "token for {agent_id} is shorter than {MIN_TOKEN_CHARS} characters"
-                ));
-            }
-            let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-            let entry = TokenEntry {
+        Self::from_enrollments(entries.into_iter().map(|(agent_id, manifest_ref, token)| {
+            Enrollment {
                 agent_id,
                 manifest_ref,
-                token_sha256: hex(&hash),
+                token,
                 revoked: false,
                 expires_at_unix: None,
+            }
+        }))
+    }
+
+    /// Build a store from full enrollments, including revoked and expiring ones.
+    pub fn from_enrollments(entries: impl IntoIterator<Item = Enrollment>) -> Result<Self, String> {
+        let mut by_hash = HashMap::new();
+        for enrollment in entries {
+            if enrollment.token.chars().count() < MIN_TOKEN_CHARS {
+                return Err(format!(
+                    "token for {} is shorter than {MIN_TOKEN_CHARS} characters",
+                    enrollment.agent_id
+                ));
+            }
+            let hash: [u8; 32] = Sha256::digest(enrollment.token.as_bytes()).into();
+            let entry = TokenEntry {
+                agent_id: enrollment.agent_id,
+                manifest_ref: enrollment.manifest_ref,
+                token_sha256: hex(&hash),
+                revoked: enrollment.revoked,
+                expires_at_unix: enrollment.expires_at_unix,
             };
             by_hash.insert(hash, entry);
         }
