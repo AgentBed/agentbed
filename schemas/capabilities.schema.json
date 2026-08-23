@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/capabilities.schema.json",
+  "title": "Agentbed capabilities block",
+  "description": "The shared capabilities block of ADR-001 §6.1, referenced by all four manifest kinds so one compiler serves all of them. JSON Schema validates shape only; the semantic checks listed in ADR §6 (units exist, skill capabilities are a subset of the agent's, min_safety compared against the host's reported vector, class-F diffs rejected at propose) are the broker's and are not expressible here.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "fs": { "$ref": "#/$defs/fsScope" },
+    "net": { "$ref": "#/$defs/netScope" },
+    "system": { "$ref": "#/$defs/systemScope" },
+    "operations": { "$ref": "#/$defs/operationPolicies" },
+    "quotas": { "$ref": "#/$defs/quotas" },
+    "desktop": { "$ref": "#/$defs/desktop" },
+    "secrets": { "$ref": "#/$defs/secrets" },
+    "effects": { "$ref": "#/$defs/effects" },
+    "risk": { "$ref": "#/$defs/risk" }
+  },
+  "$defs": {
+    "effectClass": {
+      "description": "Effect classes of effects.md §1. F is outside the ordering: it is refused, never authorized, and therefore never appears in a granted effect set.",
+      "enum": ["R", "D", "M", "E"]
+    },
+    "absolutePath": { "type": "string", "pattern": "^/" },
+    "fsScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "read": { "type": "array", "items": { "$ref": "#/$defs/absolutePath" } },
+        "write": { "type": "array", "items": { "$ref": "#/$defs/absolutePath" } }
+      }
+    },
+    "netScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "egress": {
+          "description": "Destinations as ASCII IDNA A-label host plus explicit port, or the literals \"none\" / \"all\" (ADR §5). Compiled to an nftables set keyed on the identity's cgroup; hostnames are resolved and pinned per request by the connector, never trusted from the caller.",
+          "oneOf": [
+            { "enum": ["none", "all"] },
+            { "type": "array", "items": { "type": "string", "pattern": "^\\*?[A-Za-z0-9._-]+:[0-9]{1,5}$" } }
+          ]
+        },
+        "listen": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } }
+      }
+    },
+    "resourceName": {
+      "description": "Resources of the safety vector (effects.md §2). service_state exists because restarting a unit is runtime state, not root_config, and its rollback restores only desired active/inactive state.",
+      "enum": [
+        "root_config", "packages", "bootloader", "kernel", "service_state",
+        "plugin_data", "desktop_data", "home_data", "external_effects"
+      ]
+    },
+    "footprint": {
+      "description": "Declared D/M footprint. Required, and adapter-resolved metadata (unit analysis, package scriptlet inspection) overrides self-declaration; an unresolved footprint is a refusal reason, never a guess (effects.md §1).",
+      "type": "object",
+      "required": ["affected_resources", "added_effects"],
+      "additionalProperties": false,
+      "properties": {
+        "affected_resources": { "type": "array", "items": { "$ref": "#/$defs/resourceName" } },
+        "added_effects": {
+          "description": "Effects the operation adds beyond its minimum set — e.g. [E] for a unit that fires a webhook on restart. Unknown behaviour is refused, not declared empty.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/effectClass" }
+        }
+      }
+    },
+    "systemScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "services": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "control": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["unit", "actions", "affected_resources", "added_effects"],
+                "additionalProperties": false,
+                "properties": {
+                  "unit": { "type": "string", "pattern": "^[A-Za-z0-9@:._\\-\\\\]+\\.(service|socket|timer|target|path|mount)$" },
+                  "actions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "enum": ["start", "stop", "restart", "reload"] }
+                  },
+                  "affected_resources": { "type": "array", "items": { "$ref": "#/$defs/resourceName" } },
+                  "added_effects": { "type": "array", "items": { "$ref": "#/$defs/effectClass" } }
+                }
+              }
+            }
+          }
+        },
+        "packages": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "install": {
+              "type": "object",
+              "required": ["allow", "require_signatures"],
+              "additionalProperties": false,
+              "properties": {
+                "allow": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["name", "repo", "affected_resources", "added_effects"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "description": "Exact package name. No globs: post-install scripts run as root (ADR §5.1).",
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
+                      },
+                      "repo": { "type": "string", "minLength": 1 },
+                      "version": { "type": "string" },
+                      "affected_resources": { "type": "array", "items": { "$ref": "#/$defs/resourceName" } },
+                      "added_effects": { "type": "array", "items": { "$ref": "#/$defs/effectClass" } }
+                    }
+                  }
+                },
+                "require_signatures": { "const": true }
+              }
+            },
+            "remove": { "enum": ["deny", "allow"] }
+          }
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "propose": { "type": "boolean" },
+            "apply": { "enum": ["auto", "requires_approval", "deny"] }
+          }
+        },
+        "shell": { "enum": ["deny", "audited", "allow"] }
+      }
+    },
+    "operationPolicies": {
+      "description": "Explicit per-operation policy — stage 3 of the precedence ladder in effects.md §1. The shorthands above (system.config.apply, system.shell, effects.external) compile into entries of this same table; entries here name tools directly. Stage 4 (the class ceiling) applies only to operations with no entry at all.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["policy"],
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "description": "deny refuses; requires_approval always demands a per-call approval regardless of the class ceiling; pre_authorized allows arguments inside the declared bounds.",
+            "enum": ["deny", "requires_approval", "pre_authorized"]
+          },
+          "bounds": {
+            "description": "Field-level bounds for a pre_authorized scope. Absent bounds on a pre_authorized policy means the scope is unbounded, which the broker refuses to compile.",
+            "type": "object"
+          },
+          "out_of_bounds": {
+            "description": "What happens to arguments outside the bounds. Never a fall-through to the class ceiling (effects.md §1 stage 3): either a per-call approval or a refusal.",
+            "enum": ["requires_approval", "deny"],
+            "default": "requires_approval"
+          }
+        }
+      }
+    },
+    "quotas": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": { "type": "string" },
+        "memory": { "type": "string" },
+        "pids": { "type": "integer", "minimum": 1 },
+        "disk": { "type": "string" },
+        "tx_per_day": { "type": "integer", "minimum": 0 },
+        "calls_per_day": {
+          "description": "Ceiling on authorized calls per agent per day, including class-R calls. Stage 5 is a mandatory final veto: exhaustion refuses even an approved or pre-authorized call.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "desktop": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "own": { "type": "boolean" },
+        "takeover": { "enum": ["owner", "any_human", "none"] }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "use": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["connector", "origins", "operations"],
+            "additionalProperties": false,
+            "properties": {
+              "connector": { "type": "string", "minLength": 1 },
+              "origins": {
+                "description": "scheme + ASCII A-label host + explicit port. No wildcard credential origins in v0 (ADR §5).",
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "pattern": "^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?:[0-9]{1,5}$" }
+              },
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["name"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "fields": { "type": "object" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "external": {
+          "description": "How class-E calls are governed. pre_authorized requires named operations with field-level bounds under secrets.use; it deliberately overrides the class ceiling (stage 3 before stage 4).",
+          "enum": ["requires_approval", "pre_authorized", "deny"]
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_unapproved_class": {
+          "description": "Highest effect class invocable without approval (stage 4). Never permits F.",
+          "$ref": "#/$defs/effectClass"
+        },
+        "min_safety": {
+          "description": "Per-resource rollback minimums. A D or M step against a resource below its minimum — or at none — is refused, with no manifest opt-in (effects.md §2).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "root_config": { "enum": ["none", "snapshot_reboot", "snapshot_live", "generation"] },
+            "packages": { "enum": ["none", "snapshot_reboot", "snapshot_live", "generation"] },
+            "bootloader": { "enum": ["none", "snapshot_reboot", "snapshot_live", "generation"] },
+            "kernel": { "enum": ["none", "snapshot_reboot", "snapshot_live", "generation"] },
+            "service_state": { "enum": ["none", "desired_state"] },
+            "plugin_data": { "enum": ["none", "dedicated_snapshot"] },
+            "desktop_data": { "enum": ["none", "dedicated_snapshot"] },
+            "home_data": { "enum": ["none", "dedicated_snapshot"] }
+          }
+        }
+      }
+    }
+  }
+}

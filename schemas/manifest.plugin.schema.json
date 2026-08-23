@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/manifest.plugin.schema.json",
+  "title": "Plugin manifest",
+  "description": "ADR-001 §6.4. Compiles to a rootless Podman Quadlet unit run by a dedicated service user per plugin trust domain — one compromised plugin must not reach a sibling's socket, storage or volumes (Gate 4 exit test).",
+  "type": "object",
+  "required": ["kind", "version", "name", "tier", "image", "data", "capabilities", "lifecycle"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "plugin" },
+    "version": { "const": 1 },
+    "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+    "summary": { "type": "string" },
+    "tier": { "enum": ["native", "container"] },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "build": { "type": "string", "minLength": 1 },
+        "image": { "type": "string", "minLength": 1 },
+        "blessed_stack": { "type": "string" }
+      },
+      "oneOf": [{ "required": ["build"] }, { "required": ["image"] }]
+    },
+    "data": {
+      "type": "object",
+      "required": ["dir"],
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "description": "Lives on a dedicated subvolume/dataset so rolling back a config change never rolls back plugin data (ADR §5.3).",
+          "type": "string",
+          "pattern": "^/"
+        },
+        "migrate": { "type": "array", "items": { "type": "string" } },
+        "export": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "http": { "type": "string", "format": "uri" },
+        "interval": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" }
+      }
+    },
+    "expose": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ui": {
+          "type": "object",
+          "required": ["port"],
+          "additionalProperties": false,
+          "properties": { "port": { "type": "integer", "minimum": 1, "maximum": 65535 }, "path": { "type": "string" } }
+        },
+        "mcp": {
+          "type": "object",
+          "required": ["port"],
+          "additionalProperties": false,
+          "properties": { "port": { "type": "integer", "minimum": 1, "maximum": 65535 } }
+        }
+      }
+    },
+    "capabilities": { "$ref": "https://agentbed.dev/schemas/capabilities.schema.json" },
+    "lifecycle": {
+      "type": "object",
+      "required": ["image_pin", "update_policy", "restore_test"],
+      "additionalProperties": false,
+      "properties": {
+        "rebuild_from_manifest": { "type": "boolean" },
+        "image_pin": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "update_policy": { "enum": ["manual", "patch-auto"] },
+        "backup": { "enum": ["nightly", "hourly", "manual"] },
+        "restore_test": {
+          "description": "Restores are exercised, not assumed (Gate 4 exit evidence).",
+          "enum": ["monthly", "weekly", "never"]
+        },
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "backups": { "type": "string", "pattern": "^[0-9]+d$" },
+            "on_removal": { "enum": ["export_then_archive", "delete"] }
+          }
+        }
+      }
+    }
+  }
+}

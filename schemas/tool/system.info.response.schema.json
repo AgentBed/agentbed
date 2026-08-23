@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/tool/system.info.response.schema.json",
+  "title": "system.info result",
+  "description": "ADR-001 §5.1: host, adapter, per-resource safety vector (effects.md §2), generations/snapshots, probed Landlock ABI.",
+  "type": "object",
+  "required": ["host", "adapter", "safety", "safety_source", "landlock"],
+  "additionalProperties": false,
+  "properties": {
+    "host": {
+      "type": "object",
+      "required": ["hostname", "os_id", "os_version_id", "kernel_release", "architecture"],
+      "additionalProperties": false,
+      "properties": {
+        "hostname": { "type": "string" },
+        "os_id": { "type": "string" },
+        "os_version_id": { "type": "string" },
+        "kernel_release": { "type": "string" },
+        "architecture": { "type": "string" }
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "required": ["kind", "resolved", "available_at_gate"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string" },
+        "resolved": { "type": "boolean" },
+        "available_at_gate": { "type": "integer", "minimum": 0 },
+        "generations": { "type": "integer", "minimum": 0 },
+        "snapshots": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "safety": { "$ref": "https://agentbed.dev/schemas/safety-vector.schema.json" },
+    "safety_source": {
+      "description": "unresolved_adapter marks an all-none vector as 'nothing was resolved' rather than 'measured as unrecoverable'. Both refuse D/M steps; only one of them is a measurement.",
+      "enum": ["unresolved_adapter", "adapter_probe"]
+    },
+    "landlock": {
+      "type": "object",
+      "required": ["supported"],
+      "additionalProperties": false,
+      "properties": {
+        "supported": { "type": "boolean" },
+        "abi_version": { "type": "integer" }
+      }
+    }
+  }
+}

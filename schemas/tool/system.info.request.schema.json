@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/tool/system.info.request.schema.json",
+  "title": "system.info request parameters",
+  "description": "ADR-001 §5.1: system.info is class {R}. It takes no arguments at Gate 0. additionalProperties is false so an argument that would raise the effect set cannot arrive unnoticed — a tool whose effect set cannot be computed from its arguments is refused, not guessed (effects.md §1).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

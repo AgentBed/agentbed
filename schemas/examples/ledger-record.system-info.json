@@ -1,0 +1,19 @@
+{
+  "kind": "ledger_record",
+  "version": 1,
+  "record_id": "01JBQ8Z5T4W9M2K7X3N6P0R1S9",
+  "sequence": 1,
+  "prev_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "recorded_at": "2026-08-23T17:04:11Z",
+  "agent_id": "mcp-client:gate0-reader",
+  "peer": { "uid": 1000, "gid": 1000, "pid": 4711 },
+  "manifest_digest": "sha256:fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9",
+  "operation": {
+    "op": "system.info",
+    "canonicalization": "rfc8785-jcs",
+    "digest": "sha256:6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+  },
+  "effect_set": ["R"],
+  "decision": { "allowed": true, "stage": "quota" },
+  "anchor": { "state": "unanchored" }
+}

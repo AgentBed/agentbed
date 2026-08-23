@@ -1,0 +1,28 @@
+{
+  "host": {
+    "hostname": "node-vm-a",
+    "os_id": "nixos",
+    "os_version_id": "25.05",
+    "kernel_release": "6.12.8",
+    "architecture": "x86_64"
+  },
+  "adapter": {
+    "kind": "unresolved",
+    "resolved": false,
+    "available_at_gate": 1
+  },
+  "safety": {
+    "root_config": "none",
+    "packages": "none",
+    "bootloader": "none",
+    "kernel": "none",
+    "service_state": "none",
+    "plugin_data": "none",
+    "desktop_data": "none",
+    "home_data": "none",
+    "external_effects": "none",
+    "recovery_requires": "oob_console"
+  },
+  "safety_source": "unresolved_adapter",
+  "landlock": { "supported": true, "abi_version": 5 }
+}

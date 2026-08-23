@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/manifest.agent.schema.json",
+  "title": "Agent manifest",
+  "description": "ADR-001 §6.2. What a token proves is possession of a credential bound to *this* manifest — not which model, prompt or human was behind a call (ADR §5.0, threat model).",
+  "type": "object",
+  "required": ["kind", "version", "name", "runtime", "identity", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "agent" },
+    "version": { "const": 1 },
+    "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+    "runtime": { "enum": ["hermes", "openclaw", "mcp-client"] },
+    "identity": {
+      "type": "object",
+      "required": ["mcp_client_id", "owner"],
+      "additionalProperties": false,
+      "properties": {
+        "mcp_client_id": {
+          "description": "How the broker names this agent in the ledger. It is a label, never a credential: a self-asserted client id is never trusted (ADR §5.0), and the broker derives identity from the presented token alone.",
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capabilities": { "$ref": "https://agentbed.dev/schemas/capabilities.schema.json" },
+    "approvals": {
+      "type": "object",
+      "required": ["channel"],
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "description": "Where requires_approval prompts go. Must be independent of the requesting runtime, or approval degrades from authorization to friction (threat model, known weak points).",
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "tx_per_day": { "type": "integer", "minimum": 0 } }
+    }
+  },
+  "allOf": [
+    {
+      "description": "ADR §6: config.apply: requires_approval requires an approvals channel. Expressible here, so it is enforced here as well as in the broker.",
+      "if": {
+        "properties": {
+          "capabilities": {
+            "properties": { "system": { "properties": { "config": { "properties": { "apply": { "const": "requires_approval" } }, "required": ["apply"] } }, "required": ["config"] } },
+            "required": ["system"]
+          }
+        },
+        "required": ["capabilities"]
+      },
+      "then": { "required": ["approvals"] }
+    }
+  ]
+}

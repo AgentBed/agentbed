@@ -1,0 +1,17 @@
+[package]
+name = "agentbed-schemas"
+description = "The published JSON Schemas for Agentbed manifests, approvals, ledger records and tool calls, compiled once and shared by the gateway and the broker."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+jsonschema = { workspace = true }
+serde_json = { workspace = true }
+serde_norway = { workspace = true }
+
+[lints]
+workspace = true
