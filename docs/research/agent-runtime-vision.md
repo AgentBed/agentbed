@@ -115,3 +115,45 @@ These are the only items with near-term cost; each is a note against existing AD
 2. **`agentbed://events` must be a durable, cursor-resumable stream**, not fire-and-forget — an event-driven CoS that can crash and rehydrate needs replay-from-cursor. (Any webhook remains a convenience on top.)
 3. **Cheap R-class status surface.** `tx.status`, ledger queries and per-agent activity summaries should be fast and cheap enough to be called conversationally (the comm agent's fast path 0).
 4. **Approval-channel API shape.** Approvals stay on the independent channel, but the *notification* that an approval is pending should be subscribable by external runtimes, so a comm agent can say "there's a Telegram approval waiting for the diff on X" without being able to approve it. Within-budget E-effects need no new mechanism — that is effects.md scoped pre-authorization as already specified.
+
+## 7. Third-round decisions (2026-08-23, round 3)
+
+Four topics the resolved rounds had not yet covered.
+
+### 7.1 Standing preferences — one file, two planes
+
+The owner's standing instructions live in a single human-readable `PREFERENCES.md`, editable by hand or by voice ("from now on, never email clients directly — always draft"). The CoS compiles it into per-tier prompt snippets on every wake, so every agent carries the current preferences without holding them in long-lived context. **Rules with teeth are mirrored into the enforcement plane:** spending caps, allowed recipients, and effect ceilings also become Agentbed manifest constraints / scoped pre-authorizations, enforced by the broker. The same two-plane split as the architecture itself: soft preferences (tone, format, style) are prompt-plane and best-effort; hard rules are policy-plane and survive a forgetful model. A preference whose violation would be an unapproved E-effect must exist in the policy plane or it is not considered a hard rule.
+
+### 7.2 Prompt-injection posture — provenance labels + quarantine
+
+Every log event carries a provenance field: `owner` | `agent:<id>` | `external:<source>`. External-derived text (web pages, inbound email, documents, API responses) travels through the system as **quoted data, never as instructions**: tier prompts are constructed so external content is delimited and cannot address the agent, and no tier treats instructions found inside external content as coming from the owner or another tier. Two hard rules on top: an E-effect payload **derived from external content** always gets independent review, even inside a pre-authorized budget (a malicious page must not be able to ride a standing bid-adjustment authorization); and provenance survives summarization — a summary of external content is still `external`. This composes with Agentbed's own connector-side defenses (typed RPC, response projection); Staff's provenance labels cover the semantic layer Agentbed cannot see. No ingest-screening model in v1; revisit after dogfooding if provenance alone proves insufficient.
+
+### 7.3 Scheduling — the CoS owns all recurring work
+
+Recurring task definitions ("every Monday 08:00, the ads report") are entries in the log, fired by the same timer infrastructure as the §5.7 heartbeat sweeps. The comm agent can create, modify and cancel them by voice, and "what's scheduled?" is one query. No per-project scheduler state, no OS-level cron outside the log: if it recurs, the CoS can see it.
+
+### 7.4 Skills lifecycle — orchestrator-authored, independently reviewed
+
+When a task type recurs successfully, the owning orchestrator drafts a skill file from the winning approach (goal G4: recurring work becomes skills). Before a skill enters the shared library it passes the same independent review protocol as deliverables (§5.5) — a skill is a deliverable whose consumer is a future worker. The library is git-versioned, so a bad skill update is a revert, not an incident; each skill records which tasks used it, so a quality regression is traceable to the skill version. The owner is **notified, not consulted** on skill changes (they land in the daily digest); vetoing one is a revert away. Skills remain runtime-format-compatible with Hermes/OpenClaw conventions where practical (ADR §6.3), so a Staff skill can migrate if the user later adopts an external runtime.
+
+## 8. Fourth-round decisions (2026-08-23, round 4)
+
+### 8.1 Budgets — soft per project, hard per month
+
+Task-level token/$ caps (§5.4) remain the orchestrator's tool. Above them: **per-project budgets are advisory** — crossing one raises a normal-priority queue item ("ads-reporting is at 130 % of its monthly budget") but work continues; the **global monthly cap is a hard stop** — once hit, only urgent-priority tasks may run and everything else queues until the owner raises the cap by voice or edits it. Spend is queryable at any grain ("what did the ads project cost this month?") via fast path 0, and the daily digest includes yesterday's spend by project. Every model invocation writes its cost to the log at emission time, so cost accounting is a query over the same backbone as everything else — no separate metering system.
+
+### 8.2 Failure UX — triage-first, plain language
+
+When the §5.4 ladder exhausts, the CoS does not forward the failure — it forwards a **diagnosis with options**: what broke, since when, what was already tried, and 2–3 concrete choices ("Google Ads API has rejected auth since 09:00 — I can retry tonight, skip those 3 accounts and deliver a partial report, or you can re-login from your phone"). Urgency routing follows §5.3: failures blocking a deadline interject; the rest batch into the digest. Raw errors, stack traces and retry noise stay in the log for inspection; the voice channel carries only decisions worth making. A failure with an obvious safe default ("retry tonight") states it and proceeds with it if the owner doesn't respond by the decision's deadline — the queue item records the default taken.
+
+### 8.3 Onboarding — a conversational interview
+
+First run is a guided conversation with the comm agent: who you are and what you do; which services to connect (each answer spawns the corresponding connector auth flow — credentials go to Agentbed connectors, never through the conversation); your ground rules, seeding `PREFERENCES.md` (§7.1) with hard rules compiled to the policy plane immediately; a starter monthly budget (§8.1). It ends by proposing the first project from something the owner actually needs done that week — onboarding completes by *doing*, not by configuring. All of it writes ordinary config underneath (preferences file, manifests, budget entries), so a technical owner can inspect or edit the files directly; the interview is a front-end, not a format.
+
+### 8.4 Staff self-update — owner-triggered, Agentbed-transacted
+
+Staff never updates itself. Releases are pinned versions the **owner** applies through Agentbed's transaction engine — test, apply, probation, automatic rollback — exactly as ADR-001 already requires for Agentbed's own self-update (class F for agents, owner-applied through the engine). Staff may *notify* that an update exists (a queue item with the changelog) but holds no capability to install it; a Staff manifest that requested write access to Staff's own installation would be rejected at compile time. The probation health check for a Staff update includes the comm agent answering a status query — the one component whose silent failure mutes the whole interface is the one the watchdog explicitly probes.
+
+## 9. Remaining parked items
+
+Everything else is decided. Parked by design, revisited when Staff is scheduled: the final engine call (§5.2 — DSH vs OpenAI Agents SDK, pending DSH's maturity); the proposed defaults in §5.4/5.6/5.7 and §8 (standing unless the owner vetoes); local voice replacing the cloud realtime API (§2.7); multi-user (§5.8).
