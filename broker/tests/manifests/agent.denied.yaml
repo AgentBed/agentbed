@@ -1,0 +1,24 @@
+# Fixture for the stage-3 denial: an explicit operation policy of `deny`.
+#
+# Deliberately NOT a stage-1 fixture. Stage 1 is class F — kernel, bootloader,
+# storage layout, firewall plane, the watchdog, Agentbed self-modification —
+# and system.info is none of those. Using an explicit manifest denial keeps the
+# two stages distinguishable in the tests, since effects.md §1's stage-1
+# wording ("F / explicit deny") otherwise overlaps stage 3's `deny`.
+kind: agent
+version: 1
+name: gate0-denied
+runtime: mcp-client
+identity:
+  mcp_client_id: mcp-client:gate0-denied
+  owner: lp
+capabilities:
+  quotas:
+    calls_per_day: 100
+  operations:
+    system.info:
+      policy: deny
+  risk:
+    # Generous on purpose: if stage 3 were ever skipped, this ceiling would
+    # allow the call, so the test fails loudly instead of silently passing.
+    max_unapproved_class: E

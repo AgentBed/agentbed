@@ -16,10 +16,12 @@
     dead_code
 )]
 
+use agentbed_broker::adapter::UnresolvedAdapter;
 use agentbed_broker::audit::{AuditRecord, CollectingAudit};
 use agentbed_broker::config::BrokerConfig;
 use agentbed_broker::dispatch::Dispatcher;
 use agentbed_broker::identity::TokenStore;
+use agentbed_broker::manifest::ManifestStore;
 use agentbed_broker::server::Server;
 use agentbed_protocol::frame::{read_frame, write_frame, MAX_FRAME_BYTES};
 use agentbed_protocol::wire::Response;
@@ -76,7 +78,11 @@ impl Harness {
             ..BrokerConfig::default()
         };
         let audit = CollectingAudit::default();
-        let dispatcher = Arc::new(Dispatcher::new(tokens));
+        let dispatcher = Arc::new(Dispatcher::new(
+            tokens,
+            ManifestStore::new(manifest_dir()),
+            Box::new(UnresolvedAdapter),
+        ));
         let server = Server::start(&config, dispatcher, Arc::new(audit.clone()))
             .expect("broker binds its socket");
         Harness { server, audit, dir }

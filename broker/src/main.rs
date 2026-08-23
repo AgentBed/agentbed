@@ -4,10 +4,12 @@
 //! systemd socket activation, root, and the split from the gateway's
 //! `DynamicUser` come with Gate 1.
 
+use agentbed_broker::adapter::UnresolvedAdapter;
 use agentbed_broker::audit::{AuditSink, StderrAudit};
 use agentbed_broker::config::BrokerConfig;
 use agentbed_broker::dispatch::Dispatcher;
 use agentbed_broker::identity::TokenStore;
+use agentbed_broker::manifest::ManifestStore;
 use agentbed_broker::server::Server;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -60,8 +62,19 @@ fn run() -> Result<(), String> {
         return Err("token store is empty: no agent could authenticate".to_owned());
     }
 
+    let manifest_dir = config
+        .manifest_dir
+        .clone()
+        .ok_or_else(|| format!("--manifests is required\n\n{USAGE}"))?;
+
     let audit: Arc<dyn AuditSink> = Arc::new(StderrAudit);
-    let dispatcher = Arc::new(Dispatcher::new(tokens));
+    let dispatcher = Arc::new(Dispatcher::new(
+        tokens,
+        ManifestStore::new(manifest_dir),
+        // Gate 0 resolves no host adapter, so every resource reports `none`
+        // and every D/M step would be refused. The Nix adapter lands at Gate 1.
+        Box::new(UnresolvedAdapter),
+    ));
     let mut server = Server::start(&config, dispatcher, audit).map_err(|e| e.to_string())?;
     eprintln!(
         "agentbed-broker: listening on {}",
@@ -73,8 +86,8 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-const USAGE: &str = "usage: agentbed-broker --tokens <file> [--socket <path>] \
-[--manifests <dir>] [--allow-peer-uid <uid>]";
+const USAGE: &str = "usage: agentbed-broker --tokens <file> --manifests <dir> \
+[--socket <path>] [--allow-peer-uid <uid>]";
 
 fn next_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     args.next()

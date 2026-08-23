@@ -19,15 +19,19 @@
 //! points: "a bug in the broker is a full bypass"), which is why it stays this
 //! small and why the workspace lints refuse panicking constructs in it.
 
+pub mod adapter;
 pub mod audit;
 pub mod config;
 pub mod dispatch;
+pub mod host;
 pub mod identity;
 pub mod manifest;
 pub mod peercred;
 pub mod policy;
+pub mod quota;
 pub mod safety;
 pub mod server;
+pub mod tools;
 
 pub use config::BrokerConfig;
 pub use server::Server;
