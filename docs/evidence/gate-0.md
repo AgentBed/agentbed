@@ -5,7 +5,7 @@
 
 `docs/roadmap.md` Gate 0 exit evidence: *"docs merged after external review; spike builds and passes an RPC fuzz smoke test + the forged-request test."* This file records the second half.
 
-**Closure status:** the two gating tests pass and the spike builds (below). A second review round then attached further conditions before Gate 0 may be *declared closed* — freezing the protocol and operation-digest contract, moving digest computation out of the shared wire crate, covering unauthorized peer credentials, widening the RPC corpus, and naming Gate 0's logging honestly. Those are recorded in [Review round 2](#review-round-2--conditions-for-declaring-gate-0-closed) and are addressed in the follow-up work referenced there.
+**Closure status: CLOSED.** The two gating tests pass and the spike builds (below). A second review round attached further conditions before Gate 0 could be *declared closed* — freezing the protocol and operation-digest contract, moving digest computation out of the shared wire crate, covering unauthorized peer credentials, widening the RPC corpus, and naming Gate 0's logging honestly. Those are recorded in [Review round 2](#review-round-2--conditions-for-declaring-gate-0-closed); every condition was subsequently verified merged on `main` — see [Closure verification](#closure-verification-2026-08-23-main-13235b4).
 
 ## What was run
 
@@ -131,3 +131,42 @@ Raised after PR #1 merged; each is a condition on the *claim* of closure rather 
 | `docs/threat-model.md:3` claimed Revision 5 against ADR Revision 5 | Fixed; both are Revision 6, satisfying Gate 0's terminology-reconciliation condition. |
 
 The open design question from round 1 — whether to keep refusing fractional JSON numbers — is settled by `docs/protocol.md` §5: refusal is promoted from an implementation detail to a stated wire-format rule, with integers-plus-declared-units as the idiom. Revisiting it is a protocol-version change.
+
+## Closure verification (2026-08-23, main `13235b4`)
+
+An independent pass over `main` verifying that every closure condition is
+satisfied *in the merged tree*, not only claimed in the table above. Run:
+
+```
+cargo fmt --all -- --check     clean
+cargo clippy --workspace --all-targets -- -D warnings     clean
+cargo test --workspace         108 tests, 0 failures
+```
+
+Each condition, and where the merged tree satisfies it:
+
+| Condition | Verified at |
+|---|---|
+| Digest computation out of the wire crate | `proto/src/digest.rs` is rendering-only (its module doc says so; no hashing dependency); canonicalization and computation live in `broker/src/jcs.rs` and `broker/src/digest.rs` |
+| Digest contract frozen before implementation | `docs/protocol.md` §4 pins hash, domain separator, canonical input, operation-version inclusion, and the exclusion list |
+| Unknown and revoked tokens indistinguishable | normative in `docs/protocol.md` §3; asserted by `broker/tests/forged_gateway.rs` |
+| Unauthorized peer credentials tested separately | `broker/tests/transport.rs::a_peer_uid_outside_the_allow_list_is_dropped_before_a_byte_is_read` (refusal reason `peer_uid_denied`, no bytes read) |
+| Logging named honestly | `broker/src/observability.rs` — module doc opens with "This is not the audit ledger"; `broker/tests/transport.rs::no_credential_material_reaches_an_observation` |
+| RPC corpus widened | `broker/tests/rpc_fuzz_smoke.rs` — missing/null protocol version, unsupported and wrongly-typed operation versions, truncated length prefixes, malformed-first/valid-second pipelines, two valid pipelined frames |
+| Terminology reconciled | `docs/threat-model.md` and ADR-001 both Revision 6 |
+
+The Gate 0 roadmap exit conditions bind the same tree: the approval schema
+requires `{agent_id, manifest_digest, effect_set, canonical_operation,
+expires_at, nonce, single_use, channel, signature}` and the ledger-record
+schema requires `{agent_id, manifest_digest, operation, effect_set, decision,
+prev_hash, sequence}` (`schemas/`); the five-stage ladder with explicit
+operation policy at stage 3 and quota as mandatory final veto is normative in
+`docs/effects.md` §1; `service_state` carries the desired-state rollback
+contract (`docs/effects.md` §"Runtime state"); and
+`schemas/capabilities.schema.json` requires `affected_resources`/`added_effects`
+on service and package entries with adapter resolution overriding
+self-declaration.
+
+Remaining conditions from codex-003/004/005 that are **not** Gate 0's are bound
+to their owning gates in `docs/roadmap.md` and tracked as issues #12–#14; this
+closure claims nothing about them.

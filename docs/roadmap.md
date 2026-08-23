@@ -1,6 +1,6 @@
 # Roadmap — gated, not week-numbered
 
-**Status:** Revision 6 · 2026-08-23 · verdict codex-003/004/005: ACCEPTED WITH CONDITIONS — Gate 0 open; conditions below are exit criteria. Replaces the phase/week table from ADR-001 Revision 1. A gate closes only with evidence recorded in `docs/evidence/`; calendar estimates are secondary. The prior 8-week horizon is retargeted to: **NixOS-only alpha through Gate 3, no desktops/plugins/Ubuntu/production.**
+**Status:** Revision 6 · 2026-08-23 · verdict codex-003/004/005: ACCEPTED WITH CONDITIONS — **Gate 0 closed** ([evidence](evidence/gate-0.md)), Gate 1 open; conditions below are exit criteria. Replaces the phase/week table from ADR-001 Revision 1. A gate closes only with evidence recorded in `docs/evidence/`; calendar estimates are secondary. The prior 8-week horizon is retargeted to: **NixOS-only alpha through Gate 3, no desktops/plugins/Ubuntu/production.**
 
 ## Gate 0 — Ground truth
 Threat model (`threat-model.md`), effect taxonomy and transaction contract (`effects.md`) reviewed; adjacent-technology sweep (polkit/Cockpit, OPA/Cedar, SPIFFE/SPIRE, secretless brokers, gVisor/Kata/Firecracker, transactional-update/bootc/rpm-ostree) recorded in `research/`; split-process spike: unprivileged gateway ⇄ privileged broker over a Unix socket with peer creds, fixed RPC, one end-to-end read tool (`system.info`).
