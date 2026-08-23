@@ -1,6 +1,6 @@
 # Prior art (sweep of 2026-08-22)
 
-Three independent searches (system-API daemons; assistant and voice platforms; safe self-modification and sandboxing). Star counts are approximate as of the sweep date. Verdict first, evidence after.
+Three independent searches (system-API daemons; assistant and voice platforms; safe self-modification and sandboxing), run 2026-08-22 via web search plus repository page inspection; star counts and activity are as-seen on that date and are approximate. **The verdict is a market hypothesis current as of the sweep date, not a proven negative** — a reproducible sweep (queries, inclusion criteria, per-claim source dates) and an adjacent-technology pass (polkit/Cockpit, OPA/Cedar, SPIFFE/SPIRE, secretless brokers, gVisor/Kata/Firecracker, transactional-update/bootc/rpm-ostree — several are candidate *dependencies*, not just prior art) are Gate 0 tasks. Verdict first, evidence after.
 
 ## Verdict
 

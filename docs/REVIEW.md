@@ -11,11 +11,11 @@ This repository is in design phase. We want the design attacked before code exis
 ## What we want challenged
 
 1. **Enforcement honesty.** ADR §5 splits policy-checked (remote MCP clients) from kernel-enforced (spawned helpers, containers). Find any place where the document still implies kernel enforcement for something the daemon merely checks.
-2. **Egress and secrets.** Per-identity egress proxy with credential injection, default-deny nftables keyed on cgroup, layer-issued CA for TLS injection. Is the TLS model sound? What breaks with rootless Podman + pasta? What leaks?
+2. **Egress and secrets.** Connector-based credential injection (no TLS interception, no CA): server-side identity derivation, canonicalized origin/path/method scoping, pinned resolution with address-class blocking, E-classed invocations. Find an escape or a cross-identity reuse. What breaks with rootless Podman + pasta?
 3. **Transaction engine on non-Nix hosts.** `nixos-rebuild test` + probation is clear. Is snapshot + live `/etc` revert + reboot-to-rollback on Ubuntu/Btrfs an honest "snapshot" tier? What should `none`-tier hosts refuse?
 4. **Manifest schema.** §6: can every field be enforced by something? Which fields are aspirational? What is missing for plugins (resource limits, update policy, data retention)?
 5. **Identity.** Bearer tokens / mTLS / Tailscale `whois` binding for agents. Is skill-level narrowing correctly labelled as advisory?
-6. **Phase 0 scope.** Is two weeks credible for one owner plus AI pair-programming? What should be cut?
+6. **Gate scope.** Are the per-gate exit conditions in `roadmap.md` sufficient and testable for one owner plus AI pair-programming? What should be cut or added?
 7. **Prior art we missed.** If something already does the whole thing, say so with a link.
 
 ## How to report
