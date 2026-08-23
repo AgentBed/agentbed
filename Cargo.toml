@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+# Members are added as each component lands; see docs/roadmap.md Gate 0.
+members = ["watchdogd", "adapters/nix", "adapters/apt"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+repository = "https://github.com/AgentBed/agentbed"
+publish = false
+
+[workspace.dependencies]
+agentbed-protocol = { path = "proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ryu = "1"
+sha2 = "0.10"
+libc = "0.2"
+jsonschema = "0.50"
+serde_norway = "0.9"
+
+[workspace.lints.rust]
+# Denied workspace-wide; the broker re-enables it for exactly two modules
+# (SO_PEERCRED and the Landlock probe), each a documented libc call.
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+panic = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
