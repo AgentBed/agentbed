@@ -1,0 +1,42 @@
+name: repo-setup
+
+# One-shot / re-runnable repository housekeeping that needs a token:
+# creates or updates the project's label set. Run it manually from the
+# Actions tab (workflow_dispatch); it also re-runs when this file changes
+# on the default branch. Safe to re-run: --force updates in place.
+#
+# Branch protection is NOT here — GITHUB_TOKEN cannot hold the
+# administration permission. Import .github/rulesets/main-protection.json
+# under Settings → Rules → Rulesets → New ruleset → Import instead.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/repo-setup.yml"]
+
+permissions:
+  issues: write
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Sync labels
+        run: |
+          set -eu
+          label() { gh label create "$1" --color "$2" --description "$3" --force; }
+          label "gate-0" "1d76db" "Roadmap Gate 0 — Ground truth"
+          label "gate-1" "1d76db" "Roadmap Gate 1 — One safe transaction"
+          label "gate-2" "1d76db" "Roadmap Gate 2 — Identity, approvals, audit"
+          label "gate-3" "1d76db" "Roadmap Gate 3 — Enforcement (NixOS-only alpha)"
+          label "gate-4" "1d76db" "Roadmap Gate 4 — Plugins"
+          label "gate-5" "1d76db" "Roadmap Gate 5 — Ubuntu adapter"
+          label "gate-6" "1d76db" "Roadmap Gate 6 — Desktops"
+          label "review" "d93f0b" "Review finding per docs/REVIEW.md"
+          label "design" "0e8a16" "Design proposal — discussion before code"
+          label "adr" "c5def5" "Touches an ADR or another normative document"
+          label "security" "b60205" "Security-relevant (non-exploitable; else see SECURITY.md)"
