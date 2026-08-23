@@ -1,0 +1,42 @@
+# ADR §6.4. Runs as its own service user (agentbed-p-crm) with its own subuid
+# range, Podman storage and runtime dir: one compromised plugin must not reach
+# a sibling's socket or volumes.
+kind: plugin
+version: 1
+name: crm
+summary: Local CRM with contacts, companies, deals and a pipeline view
+tier: container
+image:
+  build: ./Containerfile
+  blessed_stack: sqlite+fastapi+htmx
+data:
+  # On the plugin subvolume, excluded from system rollback: rolling back a
+  # config change must never roll back the CRM database.
+  dir: /var/lib/agentbed/plugins/crm
+  migrate: ["python", "manage.py", "migrate"]
+  export: ["python", "manage.py", "export", "--format", "jsonl"]
+health:
+  http: http://127.0.0.1:8731/healthz
+  interval: 30s
+expose:
+  ui: { port: 8731, path: / }
+  mcp: { port: 8732 }
+capabilities:
+  net:
+    egress: none
+    listen: [8731, 8732]
+  quotas:
+    cpu: "25%"
+    memory: 1G
+    pids: 128
+    disk: 5G
+  risk:
+    max_unapproved_class: M
+    min_safety: { plugin_data: dedicated_snapshot }
+lifecycle:
+  rebuild_from_manifest: true
+  image_pin: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  update_policy: manual
+  backup: nightly
+  restore_test: monthly
+  retention: { backups: 90d, on_removal: export_then_archive }

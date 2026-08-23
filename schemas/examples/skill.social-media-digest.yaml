@@ -1,0 +1,16 @@
+# ADR §6.3. Narrowing here is advisory at the host: Agentbed sees runtimes,
+# not skills, so the runtime enforces this and the broker cannot.
+kind: skill
+version: 1
+name: social-media-digest
+runtime_format: hermes-skill
+requires:
+  tools: [desktop.screenshot, secret.use]
+  plugins: ["crm>=0.2"]
+capabilities:
+  net:
+    egress: ["api.hubspot.com:443"]
+  effects:
+    external: requires_approval
+  risk:
+    max_unapproved_class: R

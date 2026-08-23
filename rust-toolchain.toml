@@ -1,0 +1,13 @@
+# Pinned so "clippy is clean" means the same thing locally and in CI.
+#
+# A floating `stable` let a local 1.94 pass a lint that CI's 1.98 rejected
+# (`map_unwrap_or`), which is a failure mode worth removing rather than
+# re-diagnosing: the toolchain that gates the merge should be the toolchain a
+# contributor runs. Bump deliberately, and expect new lints when you do.
+#
+# This is the development toolchain, not the MSRV — that is `rust-version` in
+# Cargo.toml (1.82) and is what the crates promise to compile on.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

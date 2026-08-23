@@ -1,0 +1,7 @@
+# Test code may unwrap/panic: a failed assertion is the point. Production
+# paths keep the workspace-level denials — a panic in the broker is a denial of
+# service against the only authorization authority.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

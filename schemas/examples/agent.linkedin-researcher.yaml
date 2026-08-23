@@ -1,0 +1,75 @@
+# The threat model's worked example (ADR §6.2): the LinkedIn-browsing bot that
+# a hostile page is assumed to be steering (T2). Read it as "what is reachable
+# when this agent is fully compromised" — that is the review question.
+kind: agent
+version: 1
+name: linkedin-researcher
+runtime: hermes
+identity:
+  mcp_client_id: hermes:linkedin-researcher
+  owner: lp
+capabilities:
+  fs:
+    read: [/home/agent/work, /etc/nixos]
+    write: [/home/agent/work]
+  net:
+    egress: ["api.openrouter.ai:443", "api.hubspot.com:443"]
+    listen: []
+  system:
+    services:
+      control:
+        - unit: caddy.service
+          actions: [restart, reload]
+          # A restart is runtime state, never root_config. The unit fires a
+          # deploy webhook on start, so the effect is declared, not omitted:
+          # unknown behaviour would be refused rather than assumed empty.
+          affected_resources: [service_state]
+          added_effects: [E]
+    packages:
+      install:
+        allow:
+          - name: htop
+            repo: official
+            version: ">=3"
+            affected_resources: [packages]
+            added_effects: []
+        require_signatures: true
+      remove: deny
+    config: { propose: true, apply: requires_approval }
+    shell: deny
+  operations:
+    # Stage 3 of effects.md §1. config.apply above is the shorthand; spelling
+    # the same policy here is what the broker actually evaluates.
+    system.config: { policy: requires_approval }
+    hubspot.request:
+      policy: pre_authorized
+      bounds: { operation: crm.contacts.search, limit: { max: 100 } }
+      # Out of bounds does NOT fall through to the class ceiling.
+      out_of_bounds: requires_approval
+  quotas:
+    cpu: "50%"
+    memory: 2G
+    pids: 256
+    disk: 10G
+    tx_per_day: 20
+    calls_per_day: 500
+  desktop:
+    own: true
+    takeover: owner
+  secrets:
+    use:
+      - connector: hubspot
+        origins: ["https://api.hubspot.com:443"]
+        operations:
+          - name: crm.contacts.search
+            fields: { limit: { max: 100 } }
+  effects:
+    external: pre_authorized
+  risk:
+    max_unapproved_class: M
+    min_safety: { packages: snapshot_reboot, root_config: snapshot_live, home_data: dedicated_snapshot }
+approvals:
+  channel: telegram:lp
+  timeout: 30m
+budget:
+  tx_per_day: 20

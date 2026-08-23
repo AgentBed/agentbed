@@ -1,0 +1,12 @@
+[package]
+name = "agentbed-adapter-apt"
+description = "Gate 1/5 stub: host adapter (apt)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

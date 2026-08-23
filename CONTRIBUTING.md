@@ -1,5 +1,5 @@
 # Contributing
 
-Design phase: contributions are reviews and issues, not code yet. See `docs/REVIEW.md`.
+Design-led: contributions are reviews and issues first. See `docs/REVIEW.md`. The Gate 0 spike is now code — review it against the documents, which are normative: where code and document disagree, the document wins until the document is changed.
 
-When code lands: Rust for `agentbedd` and `agentbed`; Python allowed under `adapters/` and `plugins/`. All manifests validate against `schemas/`. Every mutating change to a host goes through the transaction engine — including changes to Agentbed itself.
+Rust for `agentbedd` and `agentbed`; Python allowed under `adapters/` and `plugins/`. All manifests validate against `schemas/`. Every mutating change to a host goes through the transaction engine — including changes to Agentbed itself.

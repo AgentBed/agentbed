@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/manifest.desktop.schema.json",
+  "title": "Desktop manifest",
+  "description": "ADR-001 §6.5. A shared desktop merges its agents into ONE TRUST DOMAIN by design: within it, isolation claims are void and attribution is best-effort — and best-effort attribution is never used for security authorization or non-repudiation. desktop.input carries E whenever the desktop has external egress (effects.md §1).",
+  "type": "object",
+  "required": ["kind", "version", "name", "profile", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "desktop" },
+    "version": { "const": 1 },
+    "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+    "shared": {
+      "description": "Opt-in. true means one trust domain for every agent attached to it.",
+      "type": "boolean",
+      "default": false
+    },
+    "profile": {
+      "type": "object",
+      "required": ["volume", "resource"],
+      "additionalProperties": false,
+      "properties": {
+        "volume": { "type": "string", "pattern": "^/" },
+        "resource": {
+          "description": "Desktop profiles and home volumes live on the desktop_data resource (effects.md §2).",
+          "const": "desktop_data"
+        }
+      }
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "server": { "enum": ["xvfb", "wayland"] },
+        "vnc": { "enum": ["kasmvnc", "novnc", "none"] },
+        "size": { "type": "string", "pattern": "^[0-9]{3,5}x[0-9]{3,5}$" }
+      }
+    },
+    "takeover": { "enum": ["owner", "any_human", "none"] },
+    "capabilities": { "$ref": "https://agentbed.dev/schemas/capabilities.schema.json" }
+  }
+}

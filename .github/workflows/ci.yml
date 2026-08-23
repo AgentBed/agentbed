@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain
+        # Installs exactly what rust-toolchain.toml pins, so CI and a
+        # contributor's machine run the same lints.
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build
+        run: cargo build --workspace --all-targets
+      - name: Test
+        # The RPC fuzz smoke test installs a process-global panic hook, so it
+        # is the only test in its binary and runs its cases sequentially
+        # (broker/tests/rpc_fuzz_smoke.rs).
+        run: cargo test --workspace

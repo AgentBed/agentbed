@@ -1,0 +1,23 @@
+{
+  "kind": "approval",
+  "version": 1,
+  "approval_id": "01JBQ8Z5T4W9M2K7X3N6P0R1S8",
+  "tx_digest": "sha256:8b1a9953c4611296a827abf8c47804d7d4d3c0f9a4b2c1e0f5a6d7c8b9e0f1a2",
+  "diff_digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+  "agent_id": "hermes:linkedin-researcher",
+  "manifest_digest": "sha256:fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9",
+  "effect_set": ["D"],
+  "canonical_operation": {
+    "op": "config.apply",
+    "canonicalization": "rfc8785-jcs",
+    "digest": "sha256:6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+  },
+  "expires_at": "2026-08-23T18:30:00Z",
+  "nonce": "1f0c3a9d5e7b2648",
+  "single_use": true,
+  "channel": "telegram:lp",
+  "signature": {
+    "algorithm": "ed25519",
+    "value": "3045022100c0ffee00deadbeef022100feedface00c0ffee1234567890abcdef"
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/ledger-record.schema.json",
+  "title": "Audit ledger record",
+  "description": "ADR-001 §5.2. Hash-chained; the head is anchored off-host to a WORM destination. What anchoring proves, exactly: modifications AFTER an anchored head are detectable. It does not prove the broker recorded events truthfully before anchoring — a compromised broker can lie into the ledger, and detecting that is out of scope for v0. Every record binds the exact effect set and the RFC 8785 canonical operation digest, the same bytes an approval binds.",
+  "type": "object",
+  "required": ["kind", "version", "record_id", "sequence", "prev_hash", "recorded_at", "agent_id", "manifest_digest", "operation", "effect_set", "decision"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "ledger_record" },
+    "version": { "const": 1 },
+    "record_id": { "type": "string", "minLength": 1 },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "prev_hash": {
+      "description": "Digest of the previous record's canonical bytes; the genesis record uses the all-zero digest.",
+      "$ref": "#/$defs/digest"
+    },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "agent_id": {
+      "description": "The identity the broker DERIVED from the presented credential. Records the claim the token supports, which is possession of a credential bound to a manifest — not which model or human acted.",
+      "type": "string",
+      "minLength": 1
+    },
+    "peer": {
+      "description": "Kernel-reported credentials of the connected process (SO_PEERCRED). Authenticates the channel, never the agent; recorded so a forged-gateway attempt is attributable.",
+      "type": "object",
+      "required": ["uid", "gid", "pid"],
+      "additionalProperties": false,
+      "properties": {
+        "uid": { "type": "integer", "minimum": 0 },
+        "gid": { "type": "integer", "minimum": 0 },
+        "pid": { "type": "integer" }
+      }
+    },
+    "manifest_digest": { "$ref": "#/$defs/digest" },
+    "operation": {
+      "type": "object",
+      "required": ["op", "canonicalization", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "type": "string", "minLength": 1 },
+        "canonicalization": { "const": "rfc8785-jcs" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "effect_set": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["R", "D", "M", "E"] }
+    },
+    "decision": {
+      "type": "object",
+      "required": ["allowed", "stage"],
+      "additionalProperties": false,
+      "properties": {
+        "allowed": { "type": "boolean" },
+        "stage": {
+          "description": "Which stage of the effects.md §1 ladder decided. A refusal names the stage so 'denied' is auditable as the stage the design says should fire.",
+          "enum": ["forbidden_class", "safety_minimum", "operation_policy", "class_ceiling", "quota"]
+        },
+        "reason_code": { "type": "string", "minLength": 1 }
+      }
+    },
+    "approval_ref": { "type": "string", "minLength": 1 },
+    "outcome": {
+      "description": "D/M transaction state (effects.md §3) or E step outcome (§3b). OUTCOME_UNKNOWN is terminal for automation and is never retried automatically.",
+      "enum": [
+        "PROPOSED", "TESTING", "APPLYING", "PROBATION", "PROBATION_PASSED", "COMMITTING",
+        "COMMITTED", "COMMITTED_UNANCHORED", "REVERTING", "REVERTED", "REJECTED",
+        "DISPATCHING", "SUCCEEDED", "FAILED", "OUTCOME_UNKNOWN"
+      ]
+    },
+    "provider_operation_id": { "type": "string", "minLength": 1 },
+    "anchor": {
+      "type": "object",
+      "required": ["state"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "description": "unanchored refuses further D/M transactions until anchoring resumes (ADR §5.2).",
+          "enum": ["anchored", "unanchored"]
+        },
+        "anchored_at": { "type": "string", "format": "date-time" },
+        "destination": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

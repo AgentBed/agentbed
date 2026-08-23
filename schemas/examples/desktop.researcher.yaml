@@ -1,0 +1,23 @@
+# ADR §6.5. shared: false — agents that must be isolated from each other get
+# separate desktops. desktop.input on this desktop carries E, because it has
+# external egress and even an anonymous form submission is an external effect.
+kind: desktop
+version: 1
+name: researcher-desktop
+shared: false
+profile:
+  volume: /var/lib/agentbed/desktops/researcher
+  resource: desktop_data
+display:
+  server: xvfb
+  vnc: kasmvnc
+  size: 1920x1080
+takeover: owner
+capabilities:
+  net:
+    egress: ["www.linkedin.com:443", "api.openrouter.ai:443"]
+  effects:
+    external: requires_approval
+  risk:
+    max_unapproved_class: M
+    min_safety: { desktop_data: dedicated_snapshot }

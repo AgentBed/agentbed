@@ -1,0 +1,15 @@
+# Fixture: may call system.info. Stage 4 allows it because {R} is at the
+# ceiling; there is no explicit operation policy, which is what makes stage 4
+# the deciding stage for this agent.
+kind: agent
+version: 1
+name: gate0-reader
+runtime: mcp-client
+identity:
+  mcp_client_id: mcp-client:gate0-reader
+  owner: lp
+capabilities:
+  quotas:
+    calls_per_day: 100
+  risk:
+    max_unapproved_class: R

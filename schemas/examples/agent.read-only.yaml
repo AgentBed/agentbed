@@ -1,0 +1,27 @@
+# The Gate 0 spike's own fixture: an agent that may call system.info and
+# nothing else. max_unapproved_class R means stage 4 allows the class-R read;
+# every heavier class needs an approval that does not exist until Gate 2.
+kind: agent
+version: 1
+name: gate0-reader
+runtime: mcp-client
+identity:
+  mcp_client_id: mcp-client:gate0-reader
+  owner: lp
+capabilities:
+  fs: { read: [], write: [] }
+  net: { egress: none, listen: [] }
+  system:
+    config: { propose: false, apply: deny }
+    shell: deny
+  quotas:
+    tx_per_day: 0
+    calls_per_day: 1000
+  effects:
+    external: deny
+  risk:
+    max_unapproved_class: R
+    min_safety:
+      root_config: generation
+      packages: generation
+      home_data: dedicated_snapshot

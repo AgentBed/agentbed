@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/approval.schema.json",
+  "title": "Single-use approval",
+  "description": "ADR-001 §5.0 and effects.md §1. An approval binds {transaction digest, exact diff, agent identity, manifest digest, EXACT computed effect set, RFC 8785 canonical operation/body digest, expiry, nonce} — never a singular 'effect class'. Approvals are issued at Gate 2; the schema lands at Gate 0 because the binding it encodes is a Gate 0 exit condition, and because writing it down is what makes the broker's computed binding checkable.",
+  "type": "object",
+  "required": [
+    "kind", "version", "approval_id", "agent_id", "manifest_digest",
+    "effect_set", "canonical_operation", "expires_at", "nonce", "single_use", "channel", "signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "approval" },
+    "version": { "const": 1 },
+    "approval_id": { "type": "string", "minLength": 1 },
+    "tx_digest": {
+      "description": "Present for D/M transactions; absent for a standalone E step, which has no transaction.",
+      "$ref": "#/$defs/digest"
+    },
+    "diff_digest": { "$ref": "#/$defs/digest" },
+    "agent_id": { "type": "string", "minLength": 1 },
+    "manifest_digest": { "$ref": "#/$defs/digest" },
+    "effect_set": {
+      "description": "The exact set computed by the broker pre-execution, not the tool's static minimum. An approval matching a different set is not this approval.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["R", "D", "M", "E"] }
+    },
+    "canonical_operation": { "$ref": "#/$defs/canonicalOperation" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "nonce": { "type": "string", "minLength": 16 },
+    "single_use": {
+      "description": "Always true. Consumption is durable and happens BEFORE dispatch — fsync first, send second — so a crash yields DISPATCHING, never a reusable approval (effects.md §3b).",
+      "const": true
+    },
+    "channel": {
+      "description": "The channel that issued the decision. If it is relayed by the same runtime that made the request, approval degrades to friction (threat model).",
+      "type": "string",
+      "minLength": 1
+    },
+    "signature": {
+      "type": "object",
+      "required": ["algorithm", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": { "enum": ["ed25519"] },
+        "value": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "canonicalOperation": {
+      "description": "The operation as the broker validated and schema-projected it, plus the digest over its canonical bytes. The canonicalization is named on the record so a future change is a visible migration, not a silent reinterpretation of stored approvals.",
+      "type": "object",
+      "required": ["op", "canonicalization", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "type": "string", "minLength": 1 },
+        "canonicalization": { "const": "rfc8785-jcs" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

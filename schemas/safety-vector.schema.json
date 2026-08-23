@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/safety-vector.schema.json",
+  "title": "Per-resource safety vector",
+  "description": "effects.md §2. Allowed values form a total order per resource kind. A class-D or class-M step targeting a resource below the manifest's minimum — or at none — is refused; there is NO manifest opt-in to mutate at none.",
+  "type": "object",
+  "required": ["root_config", "packages", "bootloader", "kernel", "service_state", "plugin_data", "desktop_data", "home_data", "external_effects", "recovery_requires"],
+  "additionalProperties": false,
+  "properties": {
+    "root_config": { "$ref": "#/$defs/hostSafety" },
+    "packages": { "$ref": "#/$defs/hostSafety" },
+    "bootloader": { "$ref": "#/$defs/hostSafety" },
+    "kernel": { "$ref": "#/$defs/hostSafety" },
+    "service_state": {
+      "description": "Rollback restores only the unit's desired active/inactive state. Consequences of a start/stop/restart — a webhook fired, a database migrated on boot — are NOT rolled back and must appear in the operation's added_effects as M/E.",
+      "enum": ["none", "desired_state"]
+    },
+    "plugin_data": { "$ref": "#/$defs/dataSafety" },
+    "desktop_data": { "$ref": "#/$defs/dataSafety" },
+    "home_data": { "$ref": "#/$defs/dataSafety" },
+    "external_effects": { "description": "Definitionally none.", "const": "none" },
+    "recovery_requires": { "description": "Informational, not ordered.", "enum": ["none", "remote_reboot", "oob_console"] }
+  },
+  "$defs": {
+    "hostSafety": { "enum": ["none", "snapshot_reboot", "snapshot_live", "generation"] },
+    "dataSafety": {
+      "description": "dedicated_snapshot means a dedicated, separately-mounted subvolume/dataset with its own snapshot schedule and an exercised restore procedure.",
+      "enum": ["none", "dedicated_snapshot"]
+    }
+  }
+}

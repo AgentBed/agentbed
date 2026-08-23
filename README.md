@@ -4,7 +4,7 @@
 
 Agentbed is an installable layer for existing Linux distributions (NixOS and Ubuntu first; Fedora/Arch later) that turns a machine into something AI agents can fully operate — and that can always get back to a known-good state.
 
-> Status: **design phase, Revision 6 — ACCEPTED WITH CONDITIONS** after iterative independent review ([responses](docs/review-responses/)). Gate 0 (split-process spike) is open; remaining conditions are bound to gate exits in [roadmap.md](docs/roadmap.md). No code yet. The architecture is in [ADR-001](docs/adr/ADR-001-agentbed-architecture.md) with normative companions [threat-model.md](docs/threat-model.md), [effects.md](docs/effects.md) and [roadmap.md](docs/roadmap.md).
+> Status: **Revision 6 — ACCEPTED WITH CONDITIONS** after iterative independent review ([responses](docs/review-responses/)). The Gate 0 split-process spike is implemented and its two gating tests pass ([evidence](docs/evidence/gate-0.md)); remaining conditions are bound to later gate exits in [roadmap.md](docs/roadmap.md). Nothing beyond Gate 0 exists yet: no transaction engine, no watchdog, no approvals, no ledger, no enforcement. The architecture is in [ADR-001](docs/adr/ADR-001-agentbed-architecture.md) with normative companions [threat-model.md](docs/threat-model.md), [effects.md](docs/effects.md) and [roadmap.md](docs/roadmap.md).
 
 ## What it does
 
@@ -14,6 +14,34 @@ A small set of cooperating processes — an unprivileged gateway, a minimal priv
 2. **Capability manifests** — every agent, skill, plugin and desktop declares what it may touch. The daemon compiles that into real enforcement: systemd hardening, Landlock, seccomp, nftables, a per-identity egress proxy with credential injection.
 3. **Transactional change** — every host mutation goes through observe → propose → test → apply → verify → rollback, watched by an independent watchdog. Reversibility is honest and per computed effect set: declarative changes roll back automatically, data restores from tested snapshots, external effects (email, SaaS actions) are irreversible and gated on approval or explicit, narrowly scoped pre-authorization. The host's rollback strength is reported per resource, never assumed.
 4. **Plugin and desktop runtime** — durable local apps (a CRM, a time tracker, a wrapped n8n) and disposable per-agent desktops with browser, takeover and snapshots, all as rootless Podman/Quadlet units under the same manifests.
+
+## Building the Gate 0 spike
+
+```sh
+cargo build --workspace          # gw, broker, protocol, schemas
+cargo test  --workspace          # includes the two Gate 0 gating tests
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Running the two processes by hand:
+
+```sh
+# a token store: agent id, the manifest it is bound to, and SHA-256 of its token
+printf '{"tokens":[{"agent_id":"mcp-client:gate0-reader",
+  "manifest_ref":"agent.reader.yaml","token_sha256":"'"$(printf %s "$TOKEN" | sha256sum | cut -d' ' -f1)"'"}]}' > tokens.json
+
+agentbed-broker --socket /run/agentbed/broker.sock --tokens tokens.json --manifests ./manifests &
+AGENTBED_TOKEN="$TOKEN" agentbed-gw --socket /run/agentbed/broker.sock   # speaks MCP on stdio
+```
+
+The broker verifies the token, loads the manifest itself, computes the effect
+set and the RFC 8785 canonical operation digest, and applies the five-stage
+policy ladder of [effects.md](docs/effects.md) §1. The gateway holds no
+verifier, no manifest and no policy — see [`docs/evidence/gate-0.md`](docs/evidence/gate-0.md)
+for what that buys and what it does not.
+
+Layout: `gw/` · `broker/` · `proto/` (shared wire protocol) · `schemas/`
+(published JSON Schemas + examples) · `watchdogd/`, `adapters/` (Gate 1 stubs).
 
 ## What it deliberately does not do
 
