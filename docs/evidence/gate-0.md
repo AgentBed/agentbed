@@ -5,6 +5,8 @@
 
 `docs/roadmap.md` Gate 0 exit evidence: *"docs merged after external review; spike builds and passes an RPC fuzz smoke test + the forged-request test."* This file records the second half.
 
+**Closure status:** the two gating tests pass and the spike builds (below). A second review round then attached further conditions before Gate 0 may be *declared closed* — freezing the protocol and operation-digest contract, moving digest computation out of the shared wire crate, covering unauthorized peer credentials, widening the RPC corpus, and naming Gate 0's logging honestly. Those are recorded in [Review round 2](#review-round-2--conditions-for-declaring-gate-0-closed) and are addressed in the follow-up work referenced there.
+
 ## What was run
 
 ```
@@ -113,3 +115,19 @@ Note the honest readings in that output: the safety vector is `none` across the 
 ## What this does not show
 
 Gate 0 is a spike. Not demonstrated here, and not claimed: no transaction engine, no watchdog or decision log, no WAL, no approvals, no ledger hash chain or WORM anchor, no Landlock/seccomp helpers, no nftables, no connectors, no host adapter, and the broker runs unprivileged. Those are Gates 1–3 (`docs/roadmap.md`).
+
+## Review round 2 — conditions for declaring Gate 0 closed
+
+Raised after PR #1 merged; each is a condition on the *claim* of closure rather than a defect in what shipped.
+
+| Condition | Disposition |
+|---|---|
+| Keep `proto/` strictly wire-level; move production JCS projection/digest into the broker | Done. `proto/` retains framing, envelopes, typed operations, wire error/stage enums, strict decoding and digest *rendering*; canonicalization and digest *computation* moved to `broker/`. RFC 8785 fixtures stay shared at `tests/fixtures/rfc8785/`. |
+| Freeze the digest contract before implementing it | Done — [`docs/protocol.md`](../protocol.md) §4 pins hash, domain separator, canonical input object, inclusion of operation version, and the exclusion list (request id, credential, session metadata, gateway assertions). |
+| Unknown and revoked tokens return the same generic `unauthenticated` | Already held before the round; now also stated normatively in `docs/protocol.md` §3 rather than only asserted by a test. |
+| Test unauthorized peer credentials separately | Done. Enforcement existed but no test covered a *denied* uid; `broker/tests/transport.rs` now configures a foreign uid and asserts the connection is dropped without a byte being read. |
+| Describe Gate 0 logging as structured, redacted observability, not the anchored ledger | Done, by renaming rather than re-wording: the module and its types no longer claim to be an audit ledger, and a test asserts no credential material reaches an observation. |
+| Widen the RPC corpus | Done — missing and unsupported protocol versions, missing and unsupported operation versions, truncated headers, malformed-first/valid-second pipelines, and two valid pipelined frames. |
+| `docs/threat-model.md:3` claimed Revision 5 against ADR Revision 5 | Fixed; both are Revision 6, satisfying Gate 0's terminology-reconciliation condition. |
+
+The open design question from round 1 — whether to keep refusing fractional JSON numbers — is settled by `docs/protocol.md` §5: refusal is promoted from an implementation detail to a stated wire-format rule, with integers-plus-declared-units as the idiom. Revisiting it is a protocol-version change.
