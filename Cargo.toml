@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 # Members are added as each component lands; see docs/roadmap.md Gate 0.
-members = ["proto", "schemas", "watchdogd", "adapters/nix", "adapters/apt"]
+members = ["proto", "schemas", "broker", "watchdogd", "adapters/nix", "adapters/apt"]
 
 [workspace.package]
 version = "0.0.1"

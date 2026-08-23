@@ -1,0 +1,93 @@
+//! Broker entry point.
+//!
+//! Gate 0 runs as a normal user with the socket under a `0700` directory;
+//! systemd socket activation, root, and the split from the gateway's
+//! `DynamicUser` come with Gate 1.
+
+use agentbed_broker::audit::{AuditSink, StderrAudit};
+use agentbed_broker::config::BrokerConfig;
+use agentbed_broker::dispatch::Dispatcher;
+use agentbed_broker::identity::TokenStore;
+use agentbed_broker::server::Server;
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("agentbed-broker: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), String> {
+    let mut config = BrokerConfig::default();
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--socket" => config.socket_path = PathBuf::from(next_value(&mut args, &arg)?),
+            "--tokens" => {
+                config.token_store_path = Some(PathBuf::from(next_value(&mut args, &arg)?));
+            }
+            "--manifests" => {
+                config.manifest_dir = Some(PathBuf::from(next_value(&mut args, &arg)?));
+            }
+            "--allow-peer-uid" => {
+                let raw = next_value(&mut args, &arg)?;
+                let uid: u32 = raw.parse().map_err(|_| format!("invalid uid: {raw}"))?;
+                config.allowed_peer_uids.push(uid);
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            other => return Err(format!("unknown argument: {other}\n\n{USAGE}")),
+        }
+    }
+
+    let token_path = config
+        .token_store_path
+        .clone()
+        .ok_or_else(|| format!("--tokens is required\n\n{USAGE}"))?;
+    let tokens = TokenStore::load(&token_path)?;
+    if tokens.is_empty() {
+        // A broker that can authenticate nobody should say so at startup
+        // rather than refusing every call at runtime for an unclear reason.
+        return Err("token store is empty: no agent could authenticate".to_owned());
+    }
+
+    let audit: Arc<dyn AuditSink> = Arc::new(StderrAudit);
+    let dispatcher = Arc::new(Dispatcher::new(tokens));
+    let mut server = Server::start(&config, dispatcher, audit).map_err(|e| e.to_string())?;
+    eprintln!(
+        "agentbed-broker: listening on {}",
+        server.socket_path().display()
+    );
+
+    wait_for_signal();
+    server.shutdown(Duration::from_secs(5));
+    Ok(())
+}
+
+const USAGE: &str = "usage: agentbed-broker --tokens <file> [--socket <path>] \
+[--manifests <dir>] [--allow-peer-uid <uid>]";
+
+fn next_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
+    args.next()
+        .ok_or_else(|| format!("{flag} requires a value"))
+}
+
+/// Block until the process is asked to stop.
+///
+/// Gate 0 has no signal handling beyond "the supervisor kills us": reading
+/// stdin to EOF is enough for a spike run under a terminal or a unit with
+/// `StandardInput=null`, and it avoids installing a handler whose interaction
+/// with the transaction engine has not been designed yet.
+fn wait_for_signal() {
+    let mut sink = String::new();
+    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut sink);
+}

@@ -11,6 +11,18 @@ name = "agentbed-adapter-nix"
 version = "0.0.1"
 
 [[package]]
+name = "agentbed-broker"
+version = "0.0.1"
+dependencies = [
+ "agentbed-protocol",
+ "agentbed-schemas",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "agentbed-protocol"
 version = "0.0.1"
 dependencies = [
