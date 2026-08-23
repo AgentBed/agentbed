@@ -255,7 +255,10 @@ impl ResponseError {
     /// A refusal attributed to a precedence stage.
     #[must_use]
     pub fn at_stage(code: ErrorCode, stage: DecisionStage) -> Self {
-        ResponseError { code, stage: Some(stage) }
+        ResponseError {
+            code,
+            stage: Some(stage),
+        }
     }
 }
 
@@ -319,7 +322,13 @@ impl Response {
     /// A refusal, correlated where possible.
     #[must_use]
     pub fn failed(id: Option<RequestId>, error: ResponseError) -> Self {
-        Response { v: PROTOCOL_VERSION, id, result: None, binding: None, error: Some(error) }
+        Response {
+            v: PROTOCOL_VERSION,
+            id,
+            result: None,
+            binding: None,
+            error: Some(error),
+        }
     }
 
     /// Whether this response carries a result.
@@ -363,7 +372,10 @@ mod tests {
                 r#"{{"v":1,"id":"01J","op":"system.info","auth":{{"token":"t"}},{injected}}}"#
             );
             let err = parse_request(&raw).unwrap_err();
-            assert!(err.contains("unknown field"), "{injected} was not rejected: {err}");
+            assert!(
+                err.contains("unknown field"),
+                "{injected} was not rejected: {err}"
+            );
         }
     }
 

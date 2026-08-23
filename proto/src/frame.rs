@@ -57,6 +57,8 @@ impl FrameError {
     /// choose how the *next* bytes are framed. `false` means the caller may
     /// answer with an error frame and keep reading.
     #[must_use]
+    // The arms answer alike for unlike reasons; collapsing them would erase why.
+    #[allow(clippy::match_same_arms)]
     pub fn stream_position_lost(&self) -> bool {
         match self {
             // The oversized body was never consumed; whatever follows it would
@@ -75,7 +77,10 @@ impl std::fmt::Display for FrameError {
         match self {
             FrameError::Eof => write!(f, "end of stream at frame boundary"),
             FrameError::Truncated { expected, received } => {
-                write!(f, "truncated frame: expected {expected} bytes, got {received}")
+                write!(
+                    f,
+                    "truncated frame: expected {expected} bytes, got {received}"
+                )
             }
             FrameError::Oversize { declared, limit } => {
                 write!(f, "frame length {declared} exceeds limit {limit}")
@@ -103,7 +108,10 @@ pub fn read_frame<R: Read>(reader: &mut R, limit: u32) -> Result<Vec<u8>, FrameE
     match read_full(reader, &mut prefix)? {
         0 => return Err(FrameError::Eof),
         n if n < LENGTH_PREFIX_BYTES => {
-            return Err(FrameError::Truncated { expected: LENGTH_PREFIX_BYTES, received: n })
+            return Err(FrameError::Truncated {
+                expected: LENGTH_PREFIX_BYTES,
+                received: n,
+            })
         }
         _ => {}
     }
@@ -132,8 +140,10 @@ pub fn write_frame<W: Write>(writer: &mut W, body: &[u8], limit: u32) -> Result<
     if body.is_empty() {
         return Err(FrameError::ZeroLength);
     }
-    let declared = u32::try_from(body.len())
-        .map_err(|_| FrameError::Oversize { declared: u32::MAX, limit })?;
+    let declared = u32::try_from(body.len()).map_err(|_| FrameError::Oversize {
+        declared: u32::MAX,
+        limit,
+    })?;
     if declared > limit {
         return Err(FrameError::Oversize { declared, limit });
     }
@@ -148,7 +158,9 @@ pub fn write_frame<W: Write>(writer: &mut W, body: &[u8], limit: u32) -> Result<
 fn read_full<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<usize, FrameError> {
     let mut filled = 0usize;
     while filled < buf.len() {
-        let Some(slice) = buf.get_mut(filled..) else { break };
+        let Some(slice) = buf.get_mut(filled..) else {
+            break;
+        };
         match reader.read(slice) {
             Ok(0) => break,
             Ok(n) => filled = filled.saturating_add(n),
@@ -180,7 +192,10 @@ mod tests {
     #[test]
     fn clean_eof_at_boundary() {
         let mut cursor = std::io::Cursor::new(Vec::new());
-        assert!(matches!(read_frame(&mut cursor, MAX_FRAME_BYTES), Err(FrameError::Eof)));
+        assert!(matches!(
+            read_frame(&mut cursor, MAX_FRAME_BYTES),
+            Err(FrameError::Eof)
+        ));
     }
 
     #[test]
@@ -189,7 +204,13 @@ mod tests {
         bytes.truncate(6);
         let mut cursor = std::io::Cursor::new(bytes);
         let err = read_frame(&mut cursor, MAX_FRAME_BYTES).unwrap_err();
-        assert!(matches!(err, FrameError::Truncated { expected: 7, received: 2 }));
+        assert!(matches!(
+            err,
+            FrameError::Truncated {
+                expected: 7,
+                received: 2
+            }
+        ));
         assert!(err.stream_position_lost());
     }
 
@@ -198,7 +219,10 @@ mod tests {
         let mut cursor = std::io::Cursor::new(vec![0u8, 0u8]);
         assert!(matches!(
             read_frame(&mut cursor, MAX_FRAME_BYTES),
-            Err(FrameError::Truncated { expected: 4, received: 2 })
+            Err(FrameError::Truncated {
+                expected: 4,
+                received: 2
+            })
         ));
     }
 
@@ -208,7 +232,13 @@ mod tests {
         bytes.extend_from_slice(b"nope");
         let mut cursor = std::io::Cursor::new(bytes);
         let err = read_frame(&mut cursor, MAX_FRAME_BYTES).unwrap_err();
-        assert!(matches!(err, FrameError::Oversize { declared: u32::MAX, .. }));
+        assert!(matches!(
+            err,
+            FrameError::Oversize {
+                declared: u32::MAX,
+                ..
+            }
+        ));
         assert!(err.stream_position_lost());
     }
 
@@ -225,8 +255,17 @@ mod tests {
         let mut bytes = framed(b"{\"n\":1}");
         bytes.extend_from_slice(&framed(b"{\"n\":2}"));
         let mut cursor = std::io::Cursor::new(bytes);
-        assert_eq!(read_frame(&mut cursor, MAX_FRAME_BYTES).unwrap(), b"{\"n\":1}");
-        assert_eq!(read_frame(&mut cursor, MAX_FRAME_BYTES).unwrap(), b"{\"n\":2}");
-        assert!(matches!(read_frame(&mut cursor, MAX_FRAME_BYTES), Err(FrameError::Eof)));
+        assert_eq!(
+            read_frame(&mut cursor, MAX_FRAME_BYTES).unwrap(),
+            b"{\"n\":1}"
+        );
+        assert_eq!(
+            read_frame(&mut cursor, MAX_FRAME_BYTES).unwrap(),
+            b"{\"n\":2}"
+        );
+        assert!(matches!(
+            read_frame(&mut cursor, MAX_FRAME_BYTES),
+            Err(FrameError::Eof)
+        ));
     }
 }

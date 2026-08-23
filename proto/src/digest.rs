@@ -41,7 +41,10 @@ impl Digest {
         let out = hasher.finalize();
         let mut bytes = [0u8; 32];
         bytes.copy_from_slice(&out);
-        Digest { algorithm: DigestAlgorithm::Sha256, bytes }
+        Digest {
+            algorithm: DigestAlgorithm::Sha256,
+            bytes,
+        }
     }
 
     /// The algorithm this digest was produced with.
@@ -77,23 +80,36 @@ impl<'de> Deserialize<'de> for Digest {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error as _;
         let raw = String::deserialize(deserializer)?;
-        let (algorithm, hex) =
-            raw.split_once(':').ok_or_else(|| D::Error::custom("digest missing algorithm tag"))?;
+        let (algorithm, hex) = raw
+            .split_once(':')
+            .ok_or_else(|| D::Error::custom("digest missing algorithm tag"))?;
         if algorithm != DigestAlgorithm::Sha256.label() {
             return Err(D::Error::custom("unsupported digest algorithm"));
         }
-        if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        if hex.len() != 64
+            || !hex
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         {
             return Err(D::Error::custom("malformed digest"));
         }
         let mut bytes = [0u8; 32];
         for (i, slot) in bytes.iter_mut().enumerate() {
-            let start = i.checked_mul(2).ok_or_else(|| D::Error::custom("malformed digest"))?;
-            let end = start.checked_add(2).ok_or_else(|| D::Error::custom("malformed digest"))?;
-            let pair = hex.get(start..end).ok_or_else(|| D::Error::custom("malformed digest"))?;
+            let start = i
+                .checked_mul(2)
+                .ok_or_else(|| D::Error::custom("malformed digest"))?;
+            let end = start
+                .checked_add(2)
+                .ok_or_else(|| D::Error::custom("malformed digest"))?;
+            let pair = hex
+                .get(start..end)
+                .ok_or_else(|| D::Error::custom("malformed digest"))?;
             *slot = u8::from_str_radix(pair, 16).map_err(D::Error::custom)?;
         }
-        Ok(Digest { algorithm: DigestAlgorithm::Sha256, bytes })
+        Ok(Digest {
+            algorithm: DigestAlgorithm::Sha256,
+            bytes,
+        })
     }
 }
 
@@ -112,7 +128,10 @@ impl CanonicalDigest {
     pub fn of(value: &serde_json::Value) -> Result<Self, jcs::JcsError> {
         let canonical_bytes = jcs::canonicalize(value)?;
         let digest = Digest::sha256(&canonical_bytes);
-        Ok(CanonicalDigest { canonical_bytes, digest })
+        Ok(CanonicalDigest {
+            canonical_bytes,
+            digest,
+        })
     }
 
     /// The canonical bytes themselves.

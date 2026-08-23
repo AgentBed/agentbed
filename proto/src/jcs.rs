@@ -76,7 +76,9 @@ fn write_value(value: &Value, out: &mut String) -> Result<(), JcsError> {
                 }
                 write_string(key, out);
                 out.push(':');
-                let Some(v) = map.get(key.as_str()) else { continue };
+                let Some(v) = map.get(key.as_str()) else {
+                    continue;
+                };
                 write_value(v, out)?;
             }
             out.push('}');
