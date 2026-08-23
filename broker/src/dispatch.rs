@@ -21,14 +21,15 @@
 //!    the caller's serialization and never re-serialized later
 //!    (`docs/effects.md` §1).
 //! 5. **Compute the effect set and evaluate the ladder** (`policy`).
-//! 6. Execute only if the ladder allowed, charging the quota first.
+//! 6. Execute only if the ladder allowed. Stage 5 admits atomically inside
+//!    the ladder, so there is no window between "may proceed" and "counted".
 
 use crate::adapter::HostAdapter;
 use crate::audit::{AuditRecord, AuditSink};
 use crate::identity::{AgentContext, TokenStore};
 use crate::manifest::ManifestStore;
 use crate::peercred::PeerCredentials;
-use crate::policy::{evaluate, Decision};
+use crate::policy::{evaluate, CallAdmission, Decision};
 use crate::quota::QuotaLedger;
 use crate::tools::system_info;
 use agentbed_protocol::digest::{CanonicalDigest, Digest};
@@ -137,12 +138,13 @@ impl Dispatcher {
 
         // (5) Effect set and the five-stage ladder.
         let call = system_info::describe_call();
-        let decision = evaluate(
-            &call,
-            &manifest,
-            &self.adapter.safety_vector(),
-            self.quotas.state_for(agent.agent_id()),
-        );
+        // Stage 5 admits through this handle: check and count happen under one
+        // lock, so concurrent calls at the boundary cannot both be allowed.
+        let admission = AgentAdmission {
+            ledger: &self.quotas,
+            agent_id: agent.agent_id(),
+        };
+        let decision = evaluate(&call, &manifest, &self.adapter.safety_vector(), &admission);
 
         match decision {
             Decision::Refuse {
@@ -166,9 +168,9 @@ impl Dispatcher {
                 Response::failed(Some(id), ResponseError::at_stage(code, stage))
             }
             Decision::Allow => {
-                // Charge before executing: a call that ran must have been paid
-                // for even if the response never reaches the caller.
-                self.quotas.charge(agent.agent_id());
+                // Already counted: the ladder's stage 5 admitted this call, and
+                // admission is the charge. A call that ran has been paid for
+                // even if the response never reaches the caller.
                 let info = system_info::execute(self.adapter.as_ref());
                 let binding = CallBinding {
                     agent_id: agent.agent_id().to_owned(),
@@ -295,5 +297,20 @@ impl Dispatcher {
             return None;
         }
         Some(request)
+    }
+}
+
+/// Binds the quota ledger to one agent for the duration of a call.
+///
+/// The ladder never learns the agent id or the counter — it gets the ability to
+/// admit one call and nothing else.
+struct AgentAdmission<'a> {
+    ledger: &'a QuotaLedger,
+    agent_id: &'a str,
+}
+
+impl CallAdmission for AgentAdmission<'_> {
+    fn try_admit(&self, limit: Option<u64>) -> bool {
+        self.ledger.try_admit(self.agent_id, limit)
     }
 }

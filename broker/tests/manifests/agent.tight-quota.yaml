@@ -1,0 +1,15 @@
+# Fixture for the stage-5 concurrency regression: a budget small enough that a
+# check-then-charge race is observable. max_unapproved_class R means stages 1-4
+# allow every call, so anything refused here was refused by the quota veto.
+kind: agent
+version: 1
+name: gate0-tight-quota
+runtime: mcp-client
+identity:
+  mcp_client_id: mcp-client:gate0-tight-quota
+  owner: lp
+capabilities:
+  quotas:
+    calls_per_day: 3
+  risk:
+    max_unapproved_class: R

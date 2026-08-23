@@ -16,7 +16,8 @@
 //! 4. **Class ceiling** — applies **only** to operations with no explicit
 //!    policy at all.
 //! 5. **Quota** — a mandatory final veto over every outcome above; exhaustion
-//!    refuses even an approved or pre-authorized call.
+//!    refuses even an approved or pre-authorized call. Stage 5 *admits*
+//!    atomically rather than reading a counter: see [`CallAdmission`].
 //!
 //! Two of these rules exist because review rounds found the opposite behaviour
 //! in an earlier draft (`docs/review-responses/codex-004.md`, `-005.md`): a low
@@ -162,11 +163,22 @@ fn rank(class: EffectClass) -> u8 {
     }
 }
 
-/// Quota state for the calling agent (stage 5).
-#[derive(Debug, Clone, Copy)]
-pub struct QuotaState {
-    /// Calls already authorized for this agent in the current window.
-    pub calls_used: u64,
+/// Stage 5's admission step.
+///
+/// Deliberately an *action*, not a reading. An earlier version handed the
+/// ladder a `calls_used` snapshot and charged the counter afterwards, which is
+/// a time-of-check-to-time-of-use race: the broker serves connections on
+/// concurrent threads, so two callers could both observe `limit - 1`, both be
+/// allowed, and both execute — two calls against a budget of one. Passing the
+/// capability to admit, rather than a number to compare, makes that shape
+/// impossible to write.
+///
+/// Implementations must check and count under a single critical section, and
+/// must refuse when accounting is unavailable.
+pub trait CallAdmission {
+    /// Atomically admit one call against `limit`, returning `false` when the
+    /// budget is exhausted. `None` means no ceiling is declared.
+    fn try_admit(&self, limit: Option<u64>) -> bool;
 }
 
 /// The outcome of evaluating the ladder.
@@ -219,7 +231,7 @@ pub fn evaluate(
     call: &CallDescriptor,
     manifest: &AgentManifest,
     host: &SafetyVector,
-    quota: QuotaState,
+    admission: &dyn CallAdmission,
 ) -> Decision {
     // Stage 1 — F / globally forbidden. Terminal.
     if call.contains_forbidden() {
@@ -249,8 +261,9 @@ pub fn evaluate(
     }
 
     // Stage 5 — mandatory final veto over every allow above, including a
-    // pre-authorized one.
-    stage_five(manifest, quota)
+    // pre-authorized one. Reached only when stages 1-4 allowed, so a refused
+    // call never consumes an agent's budget.
+    stage_five(manifest, admission)
 }
 
 fn failing_safety(
@@ -327,14 +340,15 @@ fn stage_four(call: &CallDescriptor, manifest: &AgentManifest) -> Result<(), Dec
     }
 }
 
-fn stage_five(manifest: &AgentManifest, quota: QuotaState) -> Decision {
-    match manifest.calls_per_day() {
-        Some(limit) if quota.calls_used >= limit => Decision::refuse(
+fn stage_five(manifest: &AgentManifest, admission: &dyn CallAdmission) -> Decision {
+    if admission.try_admit(manifest.calls_per_day()) {
+        Decision::Allow
+    } else {
+        Decision::refuse(
             ErrorCode::QuotaExhausted,
             DecisionStage::Quota,
             "call_quota_exhausted",
-        ),
-        _ => Decision::Allow,
+        )
     }
 }
 
@@ -391,8 +405,59 @@ mod tests {
         }
     }
 
-    fn fresh() -> QuotaState {
-        QuotaState { calls_used: 0 }
+    /// An admission that always succeeds — for the stage 1-4 tests, which must
+    /// not depend on quota at all.
+    struct AlwaysAdmits;
+
+    impl CallAdmission for AlwaysAdmits {
+        fn try_admit(&self, _limit: Option<u64>) -> bool {
+            true
+        }
+    }
+
+    /// A counting admission with the same semantics as the real ledger, so the
+    /// stage-5 tests exercise the contract rather than a stub that always says
+    /// no.
+    #[derive(Default)]
+    struct CountingAdmission {
+        used: std::cell::Cell<u64>,
+    }
+
+    impl CountingAdmission {
+        fn with_used(used: u64) -> Self {
+            CountingAdmission {
+                used: std::cell::Cell::new(used),
+            }
+        }
+    }
+
+    impl CallAdmission for CountingAdmission {
+        fn try_admit(&self, limit: Option<u64>) -> bool {
+            if let Some(limit) = limit {
+                if self.used.get() >= limit {
+                    return false;
+                }
+            }
+            self.used.set(self.used.get().saturating_add(1));
+            true
+        }
+    }
+
+    /// An admission that records whether stage 5 was reached at all.
+    #[derive(Default)]
+    struct RecordingAdmission {
+        consulted: std::cell::Cell<bool>,
+    }
+
+    impl CallAdmission for RecordingAdmission {
+        fn try_admit(&self, _limit: Option<u64>) -> bool {
+            self.consulted.set(true);
+            true
+        }
+    }
+
+    fn fresh() -> AlwaysAdmits {
+        AlwaysAdmits
     }
 
     fn config_apply() -> CallDescriptor {
@@ -418,7 +483,7 @@ mod tests {
             globally_forbidden: true,
             within_bounds: Some(true),
         };
-        let decision = evaluate(&call, &manifest, &generous_host(), fresh());
+        let decision = evaluate(&call, &manifest, &generous_host(), &fresh());
         assert_eq!(decision.stage(), Some(DecisionStage::ForbiddenClass));
     }
 
@@ -433,7 +498,7 @@ mod tests {
         let mut call = config_apply();
         call.within_bounds = Some(true);
 
-        let decision = evaluate(&call, &manifest, &host, fresh());
+        let decision = evaluate(&call, &manifest, &host, &fresh());
         assert_eq!(
             decision.stage(),
             Some(DecisionStage::SafetyMinimum),
@@ -448,7 +513,7 @@ mod tests {
         let manifest = manifest(
             "  risk:\n    max_unapproved_class: M\n  operations:\n    config.apply:\n      policy: requires_approval\n",
         );
-        let decision = evaluate(&config_apply(), &manifest, &generous_host(), fresh());
+        let decision = evaluate(&config_apply(), &manifest, &generous_host(), &fresh());
         assert_eq!(
             decision,
             Decision::Refuse {
@@ -474,7 +539,7 @@ mod tests {
             within_bounds: Some(true),
         };
         assert_eq!(
-            evaluate(&call, &manifest, &generous_host(), fresh()),
+            evaluate(&call, &manifest, &generous_host(), &fresh()),
             Decision::Allow
         );
     }
@@ -493,7 +558,7 @@ mod tests {
             globally_forbidden: false,
             within_bounds: Some(false),
         };
-        let decision = evaluate(&call, &manifest, &generous_host(), fresh());
+        let decision = evaluate(&call, &manifest, &generous_host(), &fresh());
         assert_eq!(
             decision,
             Decision::Refuse {
@@ -516,7 +581,7 @@ mod tests {
             globally_forbidden: false,
             within_bounds: Some(false),
         };
-        let decision = evaluate(&call, &manifest, &generous_host(), fresh());
+        let decision = evaluate(&call, &manifest, &generous_host(), &fresh());
         assert_eq!(decision.stage(), Some(DecisionStage::OperationPolicy));
         assert!(matches!(
             decision,
@@ -535,12 +600,12 @@ mod tests {
                 &CallDescriptor::read_only("system.info"),
                 &manifest,
                 &generous_host(),
-                fresh()
+                &fresh()
             ),
             Decision::Allow
         );
 
-        let decision = evaluate(&config_apply(), &manifest, &generous_host(), fresh());
+        let decision = evaluate(&config_apply(), &manifest, &generous_host(), &fresh());
         assert_eq!(
             decision,
             Decision::Refuse {
@@ -562,7 +627,7 @@ mod tests {
             within_bounds: None,
         };
         assert_eq!(
-            evaluate(&call, &manifest, &generous_host(), fresh()).stage(),
+            evaluate(&call, &manifest, &generous_host(), &fresh()).stage(),
             Some(DecisionStage::ClassCeiling)
         );
     }
@@ -572,21 +637,19 @@ mod tests {
         let by_ceiling =
             manifest("  risk:\n    max_unapproved_class: R\n  quotas:\n    calls_per_day: 2\n");
         let call = CallDescriptor::read_only("system.info");
+        // One admission object across the calls: each allow consumes budget, so
+        // the third call is refused by the same ladder that allowed the first
+        // two — the counter is not a parameter the test can fake past.
+        let admission = CountingAdmission::default();
         assert_eq!(
-            evaluate(
-                &call,
-                &by_ceiling,
-                &generous_host(),
-                QuotaState { calls_used: 1 }
-            ),
+            evaluate(&call, &by_ceiling, &generous_host(), &admission),
             Decision::Allow
         );
-        let exhausted = evaluate(
-            &call,
-            &by_ceiling,
-            &generous_host(),
-            QuotaState { calls_used: 2 },
+        assert_eq!(
+            evaluate(&call, &by_ceiling, &generous_host(), &admission),
+            Decision::Allow
         );
+        let exhausted = evaluate(&call, &by_ceiling, &generous_host(), &admission);
         assert_eq!(
             exhausted,
             Decision::Refuse {
@@ -612,10 +675,27 @@ mod tests {
                 &scoped,
                 &pre_authorized,
                 &generous_host(),
-                QuotaState { calls_used: 1 }
+                &CountingAdmission::with_used(1),
             )
             .stage(),
             Some(DecisionStage::Quota)
+        );
+    }
+
+    #[test]
+    fn a_refused_call_never_consumes_quota() {
+        // Stage 5 is reached only after stages 1-4 allow. Otherwise a hostile
+        // caller could drain another agent's budget with calls that were always
+        // going to fail.
+        let manifest = manifest(
+            "  risk:\n    max_unapproved_class: M\n  quotas:\n    calls_per_day: 10\n  operations:\n    config.apply:\n      policy: deny\n",
+        );
+        let admission = RecordingAdmission::default();
+        let decision = evaluate(&config_apply(), &manifest, &generous_host(), &admission);
+        assert_eq!(decision.stage(), Some(DecisionStage::OperationPolicy));
+        assert!(
+            !admission.consulted.get(),
+            "a stage-3 refusal must not reach the quota counter"
         );
     }
 
@@ -628,7 +708,7 @@ mod tests {
             &config_apply(),
             &manifest,
             &generous_host(),
-            QuotaState { calls_used: 99 },
+            &CountingAdmission::with_used(99),
         );
         assert_eq!(
             decision.stage(),

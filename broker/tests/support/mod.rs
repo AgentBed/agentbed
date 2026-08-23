@@ -37,9 +37,14 @@ pub const TOKEN_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 pub const TOKEN_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 pub const TOKEN_UNKNOWN: &str = "cccccccccccccccccccccccccccccccc";
 pub const TOKEN_REVOKED: &str = "dddddddddddddddddddddddddddddddd";
+pub const TOKEN_TIGHT_QUOTA: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
 pub const AGENT_A: &str = "mcp-client:gate0-reader";
 pub const AGENT_B: &str = "mcp-client:denied-agent";
+pub const AGENT_TIGHT_QUOTA: &str = "mcp-client:gate0-tight-quota";
+
+/// The budget declared by `agent.tight-quota.yaml`.
+pub const TIGHT_QUOTA_LIMIT: usize = 3;
 
 /// Every read in these tests is bounded: a hung broker must fail the test, not
 /// hang the suite.
@@ -73,6 +78,12 @@ impl Harness {
             // absent one would make the revocation assertion pass for the
             // wrong reason (unknown token, same wire error).
             enrol(AGENT_A, "agent.reader.yaml", TOKEN_REVOKED, true),
+            enrol(
+                AGENT_TIGHT_QUOTA,
+                "agent.tight-quota.yaml",
+                TOKEN_TIGHT_QUOTA,
+                false,
+            ),
         ])
         .expect("token store");
 

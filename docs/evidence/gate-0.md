@@ -20,9 +20,10 @@ Per-binary:
 | `agentbed-protocol` (unit) | 22 | framing, strict JSON, envelope shape, digests |
 | `proto/tests/jcs_conformance.rs` | 5 | RFC 8785 vectors, UTF-16 key order, ECMAScript number forms |
 | `agentbed-schemas/tests/examples_validate.rs` | 10 | every shipped example validates; footprint/glob/approval-channel/out-of-bounds negatives |
-| `agentbed-broker` (unit) | 25 | identity, policy ladder (all five stages), safety order, quota, adapter, host probe |
+| `agentbed-broker` (unit) | 31 | identity, policy ladder (all five stages), safety order, quota, adapter, host probe |
 | `broker/tests/transport.rs` | 6 | socket permissions, peer credentials, per-frame fail-closed rules |
 | `broker/tests/system_info.rs` | 7 | served call, binding, schema conformance, stage-3 denial, quota veto |
+| `broker/tests/quota_concurrency.rs` | 2 | stage 5 under concurrent callers at the budget boundary |
 | **`broker/tests/forged_gateway.rs`** | **7** | **Gate 0 exit test (a)** |
 | **`broker/tests/rpc_fuzz_smoke.rs`** | **1** | **Gate 0 exit test (b)** — one function, many cases (see below) |
 | `gw/tests/end_to_end.rs` | 5 | gateway → broker over a real socket |
@@ -106,6 +107,8 @@ Note the honest readings in that output: the safety vector is `none` across the 
 3. **Quota accounting conflated "no counter yet" with "poisoned lock"**, so every agent's first call read as exhausted. Found by its own unit test.
 4. **The broker exited immediately under `StandardInput=null`** because its wait loop read stdin to EOF — found only by running the real binaries, not the library path. Replaced with blocked SIGTERM/SIGINT plus `sigwait`, established before any thread is spawned.
 5. **A test fixture passed for the wrong reason:** the "revoked credential" case was refused as *unknown* because the token was absent from the store, and the two are deliberately indistinguishable on the wire. The store now takes full enrollments and the fixture enrols a genuinely revoked one.
+6. **Stage 5 was not a veto under concurrency** (found by external review of this PR, codex). Quota admission read a `calls_used` snapshot and incremented afterwards, in two separate lock acquisitions. Since the broker serves connections on concurrent threads, two callers at the boundary could both observe `limit - 1`, both be allowed, and both execute — `docs/effects.md` §1 calls quota a *mandatory final veto*, and it was not one. Admission is now a single atomic operation (`QuotaLedger::try_admit`), and the ladder receives the *capability to admit* rather than a number to compare against, so check-then-charge is no longer expressible at the call site. Both regression tests were confirmed to fail against the old shape before the fix was kept: 9 admitted against a limit of 5 at the ledger's API, 5 against a limit of 3 through real concurrent connections.
+7. **`calls_per_day` never rolled over** (same review). The counter had no window, so it meant "calls per broker lifetime". It now tracks a UTC day and resets forward only: a clock stepped backwards keeps counting in the old window rather than granting a fresh budget.
 
 ## What this does not show
 
