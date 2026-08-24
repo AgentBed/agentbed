@@ -1114,7 +1114,13 @@ fn immutable_approval_ref_change_in_wal_enters_safe_mode() {
 fn original_propose_tx_id(dir: &Path) -> String {
     let durability = Arc::new(RealDurability);
     let store = WalStore::open(dir.join("wal"), durability).expect("wal");
-    store.load_records().expect("load")[0].tx_id.clone()
+    store
+        .load_records()
+        .expect("load")
+        .first()
+        .expect("load")
+        .tx_id
+        .clone()
 }
 
 #[test]

@@ -103,14 +103,16 @@ Repair tests: `broker/tests/l01_repair_review.rs` (32).
 
 RED matrix @ `236f75e` (unpiped, `--test-threads=1`): **10 FAIL / 34 PASS** (cells 1–4 payload drift, 5/7 conflicting propose immediate, 9–12 moved-base idempotency ordering).
 
-GREEN @ this commit:
+GREEN @ `236f75e` (production); lint-hardened @ this commit:
 
 ```text
 cargo test -p agentbed-broker --test l01_repair_review -- --test-threads=1   # 44 passed
 cargo fmt --all -- --check                                                   # PASS
-cargo clippy --workspace --all-targets -- -D warnings                        # FAIL (immutable RED test `l01_repair_review.rs:1117` `clippy::indexing_slicing`; production sources clean)
+cargo clippy --workspace --all-targets -- -D warnings                        # PASS (sole post-GREEN change: `l01_repair_review.rs:1117` indexing → checked `.first().expect("load")`; non-semantic)
 cargo build --workspace --all-targets                                        # PASS
 cargo test --workspace                                                       # PASS
 ```
 
-Production files changed: `broker/src/transaction/{recovery,engine}.rs`, `broker/src/storage/{wal,idempotency}.rs`. Test hash unchanged: `7da8f021b1e59067773c5d6ef75ed9213487474453e1a9e25a16b4da6fe30ff0` (`broker/tests/l01_repair_review.rs`).
+Production files changed @ `236f75e`: `broker/src/transaction/{recovery,engine}.rs`, `broker/src/storage/{wal,idempotency}.rs`. Post-GREEN test-only lint hardening: `broker/tests/l01_repair_review.rs` (`7da8f021b1e59067773c5d6ef75ed9213487474453e1a9e25a16b4da6fe30ff0` → `b201c12801b3887255c0de384c8dbbbd8e3ad5c5a7b037133103f1d2a3eaa853`).
+
+Test hash (`broker/tests/l01_repair_review.rs`): `b201c12801b3887255c0de384c8dbbbd8e3ad5c5a7b037133103f1d2a3eaa853`.
