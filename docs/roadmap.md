@@ -1,6 +1,6 @@
 # Roadmap — gated, not week-numbered
 
-**Status:** Revision 6 · 2026-08-23 · verdict codex-003/004/005: ACCEPTED WITH CONDITIONS — **Gate 0 closed** ([evidence](evidence/gate-0.md)), Gate 1 open; conditions below are exit criteria. Replaces the phase/week table from ADR-001 Revision 1. A gate closes only with evidence recorded in `docs/evidence/`; calendar estimates are secondary. The prior 8-week horizon is retargeted to: **NixOS-only alpha through Gate 3, no desktops/plugins/Ubuntu/production.**
+**Status:** Revision 7 · 2026-08-24 · verdict codex-003/004/005: ACCEPTED WITH CONDITIONS — **Gate 0 closed** ([evidence](evidence/gate-0.md)), Gate 1 open; conditions below are exit criteria. Replaces the phase/week table from ADR-001 Revision 1. A gate closes only with evidence recorded in `docs/evidence/`; calendar estimates are secondary. The prior 8-week horizon is retargeted to: **NixOS-only alpha through Gate 3, no desktops/Apps/Ubuntu/production.**
 
 ## Gate 0 — Ground truth
 Threat model (`threat-model.md`), effect taxonomy and transaction contract (`effects.md`) reviewed; adjacent-technology sweep (polkit/Cockpit, OPA/Cedar, SPIFFE/SPIRE, secretless brokers, gVisor/Kata/Firecracker, transactional-update/bootc/rpm-ostree) recorded in `research/`; split-process spike: unprivileged gateway ⇄ privileged broker over a Unix socket with peer creds, fixed RPC, one end-to-end read tool (`system.info`).
@@ -23,9 +23,11 @@ Manifest compiler v1: fs/net/system scopes → broker policy + Landlocked helper
 
 **— NixOS-only alpha ships here. —**
 
-## Gate 4 — Plugins
-Quadlet plugin runtime with **one service user per plugin trust domain** (own subuid range, storage, runtime dir); one trivial plugin (time tracker) with data snapshots, migration, export, restore test, MCP surface.
-**Exit evidence:** plugin survives host rollback with data intact; restore test executed, not just documented; a deliberately "compromised" test plugin cannot control or read a sibling plugin's containers, storage or volumes.
+## Gate 4 — Apps (`kind: plugin`)
+“Apps built for you, governed by AgentBed.” Before implementation, a documentation-only [Intent-to-App](intent-to-app.md) spike seals App Brief v1, clarification/default policy, the Designer/Builder/AgentBed handoff, the capability-proposal format and one mocked time-tracker conversation. This adds no Gate 1–3 implementation scope or exit tests.
+
+Gate 4 then builds the time tracker conventionally as a known-good reference App before automating generation: Quadlet plugin runtime with **one service user per plugin trust domain** (own subuid range, storage, runtime dir), data snapshots, migration, export, restore test and MCP surface.
+**Exit evidence:** a recorded reference contract suite maps App Brief examples to executable UI/domain/MCP tests; proves the dedicated service identity, subuid range, storage and runtime directory for the App trust domain; verifies timer/edit/weekly-total correctness; executes migration and export/import round-trips; rebuilds from pinned inputs; creates a backup, restores it and compares the canonical fixture; proves the App survives host rollback with data intact; and proves a deliberately "compromised" test plugin cannot control or read a sibling plugin's containers, storage or volumes. The suite and evidence are Gate 4 artifacts reused unchanged by the later generator spike.
 
 ## Gate 5 — Ubuntu adapter
 apt + Btrfs snapshot adapter implementing the per-resource safety vector; chaos matrix re-run on a throwaway Ubuntu VM. Precondition: `docs/evidence/node-d.md` (findmnt /, uname -r, podman --version, OOB recovery).
@@ -43,5 +45,7 @@ AgentBed Staff (the deferred first-party runtime) imposes four conditions on the
 3. **Gate 1 onward — cheap R-class status surface.** `tx.status`, ledger queries and per-agent activity summaries stay fast and cheap enough to be called conversationally (sub-second, no heavyweight auth round-trips beyond the session token). Verified informally per gate, not a chaos-matrix item.
 4. **Gate 2 — approval-pending notifications subscribable.** The *fact* that an approval is pending (id, effect class, expiry — never the grant capability) is exposed as a subscribable event, so an external runtime can tell its owner an approval is waiting on the independent channel without being able to approve it.
 
-## Later (unordered)
-Reference plugins 2–3 and generated-plugin templates · production install on Node-D (after Gate 5 evidence) · OAuth resource-server compliance (hard precondition for any beyond-tailnet exposure) · **derived attenuated credentials** (parent-chain issuance + broker subset check — Staff-readiness condition 1 makes this additive) · Fedora/bootc adapter · per-agent executor UIDs/netns everywhere · community store (signing, review, manifest summaries — only after the manifest format stabilizes) · Windows/macOS guests via Cua.
+## Later (unordered except where noted)
+**After Gate 4's reference App passes:** sentence-to-App generator spike and generated-plugin templates using the same contract suite, beginning with “Build me a time tracker to log the hours I'm spending on each project”; versioned App Brief, safe local-only defaults, at most three product questions per intake or owner-triggered **Customize** cycle, no silent capability widening, independently reviewed updates, portable source/build recipe + manifest + schema + migrations + data export + backup/restore proof. Details and acceptance criteria: [Intent-to-App design](intent-to-app.md).
+
+Reference Apps 2–3 · production install on Node-D (after Gate 5 evidence) · OAuth resource-server compliance (hard precondition for any beyond-tailnet exposure) · **derived attenuated credentials** (parent-chain issuance + broker subset check — Staff-readiness condition 1 makes this additive) · Fedora/bootc adapter · per-agent executor UIDs/netns everywhere · community store (signing, review, manifest summaries — only after the manifest format stabilizes) · Windows/macOS guests via Cua.

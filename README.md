@@ -4,7 +4,7 @@
 
 Agentbed is an installable layer for existing Linux distributions (NixOS and Ubuntu first; Fedora/Arch later) that turns a machine into something AI agents can fully operate — and that can always get back to a known-good state.
 
-> Status: **Revision 6 — ACCEPTED WITH CONDITIONS** after iterative independent review ([responses](docs/review-responses/)). **Gate 0 is closed** — the split-process spike is implemented, its two gating tests pass, and every closure condition from the second review round is verified merged ([evidence](docs/evidence/gate-0.md)); remaining conditions are bound to later gate exits in [roadmap.md](docs/roadmap.md). **Gate 1 is open** — **Gate 1 L00** (versioned Broker RPC v2 contract) is complete ([result](plans/AGB-2/RESULT.md), merged as PR #17). No transaction engine or execution, watchdog/OOB implementation, approvals, ledger, enforcement, deployment, or activation exists yet. The architecture is in [ADR-001](docs/adr/ADR-001-agentbed-architecture.md) with normative companions [threat-model.md](docs/threat-model.md), [effects.md](docs/effects.md) and [roadmap.md](docs/roadmap.md).
+> Status: **Revision 7 — ACCEPTED WITH CONDITIONS** after iterative independent review ([responses](docs/review-responses/)). **Gate 0 is closed** — the split-process spike is implemented, its two gating tests pass, and every closure condition from the second review round is verified merged ([evidence](docs/evidence/gate-0.md)); remaining conditions are bound to later gate exits in [roadmap.md](docs/roadmap.md). **Gate 1 is open** — **Gate 1 L00** (versioned Broker RPC v2 contract) is complete ([result](plans/AGB-2/RESULT.md), merged as PR #17). No transaction engine or execution, watchdog/OOB implementation, approvals, ledger, enforcement, deployment, or activation exists yet. The architecture is in [ADR-001](docs/adr/ADR-001-agentbed-architecture.md) with normative companions [threat-model.md](docs/threat-model.md), [effects.md](docs/effects.md) and [roadmap.md](docs/roadmap.md).
 
 ## What it does
 
@@ -13,7 +13,7 @@ A small set of cooperating processes — an unprivileged gateway, a minimal priv
 1. **System API** — the whole machine exposed to agents as typed MCP tools: packages, services, users, network, config, journal and coredumps, screen and input, files, secret handles, plugins, desktops.
 2. **Capability manifests** — every agent, skill, plugin and desktop declares what it may touch. The daemon compiles that into real enforcement: systemd hardening, Landlock, seccomp, nftables, a per-identity egress proxy with credential injection.
 3. **Transactional change** — every host mutation goes through observe → propose → test → apply → verify → rollback, watched by an independent watchdog. Reversibility is honest and per computed effect set: declarative changes roll back automatically, data restores from tested snapshots, external effects (email, SaaS actions) are irreversible and gated on approval or explicit, narrowly scoped pre-authorization. The host's rollback strength is reported per resource, never assumed.
-4. **Plugin and desktop runtime** — durable local apps (a CRM, a time tracker, a wrapped n8n) and disposable per-agent desktops with browser, takeover and snapshots, all as rootless Podman/Quadlet units under the same manifests.
+4. **App and desktop runtime** — “Apps built for you, governed by AgentBed”: durable local apps (internally `kind: plugin`, such as a CRM, time tracker or wrapped n8n) and disposable per-agent desktops with browser, takeover and snapshots, all as rootless Podman/Quadlet units under the same manifests.
 
 ## Building the Gate 0 spike
 
@@ -71,6 +71,7 @@ A prior-art sweep on 2026-08-22 found every piece in isolation — read-only sys
 
 - [Goals and user stories](docs/goals.md)
 - [ADR-001 — Architecture](docs/adr/ADR-001-agentbed-architecture.md) (decision, manifests, transaction engine, milestones)
+- [Intent-to-App design](docs/intent-to-app.md) — plain-language App requests, structured briefs, safe defaults and generated-App sequencing
 - [Prior art](docs/research/prior-art.md)
 - [Review brief](docs/REVIEW.md) — how to review this design and what we want challenged
 - [Contributing](CONTRIBUTING.md) — ground rules, where things live, how to open findings
@@ -84,7 +85,7 @@ A prior-art sweep on 2026-08-22 found every piece in isolation — read-only sys
 | G1 — One safe transaction | Serialized tx engine + independent watchdog; the effects.md §4 chaos matrix passes |
 | G2 — Identity, approvals, audit | Tokens, signed single-use approvals, anchored ledger |
 | G3 — Enforcement | Landlock helpers, nftables, first connector → **NixOS-only alpha** |
-| G4–G6 + later | Plugins, Ubuntu adapter, desktops, production, store |
+| G4–G6 + later | Apps (`kind: plugin`), Ubuntu adapter, desktops, generated-App templates, production, store |
 
 ## Licence
 
