@@ -23,6 +23,7 @@ base64 = "0.22"
 
 [dev-dependencies]
 libc = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
 
 [lints]
 workspace = true

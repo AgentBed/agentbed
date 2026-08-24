@@ -505,3 +505,183 @@ fn event_cursor_encodes_as_opaque_base64url() {
     let parsed = EventCursor::parse(&encoded).expect("parse opaque cursor");
     assert_eq!(parsed, cursor.with_log_id(log.log_id()));
 }
+
+#[test]
+fn transaction_ids_are_not_static_process_counter_values() {
+    let dir = scratch();
+    let tx_id = TransactionEngine::open(&dir, UnresolvedAdapter)
+        .expect("open")
+        .config_propose(
+            "agent:a",
+            "sha256:abc",
+            &propose_params("ulid-not-counter", "/etc/nixos/configuration.nix"),
+        )
+        .expect("propose")
+        .tx_id;
+    assert!(
+        !tx_id.starts_with("01ARZ3NDEKTSV4RRFFQ"),
+        "transaction ids must not reuse a fixed restart-reset counter prefix"
+    );
+}
+
+#[test]
+fn post_restart_recovered_transaction_is_not_overwritten_by_new_propose() {
+    let dir = scratch();
+    let first_tx = {
+        let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+        engine
+            .config_propose(
+                "agent:a",
+                "sha256:abc",
+                &propose_params("restart-tx-1", "/etc/nixos/a.nix"),
+            )
+            .expect("first")
+            .tx_id
+    };
+
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("reopen");
+    let second_tx = engine
+        .config_propose(
+            "agent:a",
+            "sha256:abc",
+            &propose_params("restart-tx-2", "/etc/nixos/b.nix"),
+        )
+        .expect("second")
+        .tx_id;
+
+    assert_ne!(first_tx, second_tx);
+    assert!(engine.tx_status(&first_tx).is_ok());
+    assert!(engine.tx_status(&second_tx).is_ok());
+}
+
+#[test]
+fn duplicate_tx_id_in_wal_enters_safe_mode() {
+    let dir = scratch();
+    let wal_dir = dir.join("wal");
+    let durability = Arc::new(RealDurability);
+    let shared_tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    {
+        let mut store = WalStore::open(&wal_dir, durability.clone()).expect("open");
+        for seq in 1..=2 {
+            store
+                .append_transition(&WalRecord {
+                    seq,
+                    tx_id: shared_tx.to_owned(),
+                    state: TransactionState::Proposed,
+                    idempotency_key: Some(format!("dup-{seq}")),
+                    idem_fingerprint: None,
+                    agent_id: "agent:a".to_owned(),
+                    manifest_digest: Digest::from_sha256_bytes([0; 32]),
+                    base_revision: BaseRevision {
+                        generation: Some("gen-1".to_owned()),
+                        etc_git_commit: "abc".to_owned(),
+                        config_digest: Digest::from_sha256_bytes([0x11; 32]),
+                    },
+                    effect_set: vec![EffectClass::D],
+                    diff: "diff".to_owned(),
+                    affected_resources: vec!["root_config".to_owned()],
+                    approval_ref: None,
+                    result_json: None,
+                })
+                .expect("append");
+        }
+    }
+
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("reopen");
+    let err = engine
+        .config_propose(
+            "agent:a",
+            "sha256:abc",
+            &propose_params("after-dup", "/etc/nixos/configuration.nix"),
+        )
+        .expect_err("safe mode");
+    assert!(matches!(err, EngineError::SafeMode));
+}
+
+#[test]
+fn stale_event_cursor_is_rejected_after_log_recreation() {
+    let dir = scratch();
+    let stale_cursor = {
+        let log = EventLog::open(&dir).expect("open");
+        assert!(uuid::Uuid::parse_str(&log.log_id()).is_ok());
+        let event = log
+            .append(EventRecord {
+                kind: "boot".to_owned(),
+                payload: "{}".to_owned(),
+            })
+            .expect("append");
+        log.cursor_after(&event).encode()
+    };
+
+    std::fs::remove_file(dir.join("meta.json")).expect("remove meta");
+    std::fs::remove_file(dir.join("log.jsonl")).expect("remove log");
+
+    let log = EventLog::open(&dir).expect("recreated");
+    let parsed = EventCursor::parse(&stale_cursor).expect("parse stale");
+    assert!(log.replay(&parsed).is_err());
+}
+
+#[test]
+fn cursor_without_log_id_is_rejected_on_replay() {
+    let dir = scratch();
+    let log = EventLog::open(&dir).expect("open");
+    let event = log
+        .append(EventRecord {
+            kind: "boot".to_owned(),
+            payload: "{}".to_owned(),
+        })
+        .expect("append");
+    let cursor = EventCursor::after(&event);
+    assert!(log.replay(&cursor).is_err());
+}
+
+#[test]
+fn moved_base_apply_replay_returns_original_refusal_after_restart() {
+    let dir = scratch();
+    let apply_key = idem("moved-replay");
+    let tx_id = {
+        let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+        let propose = engine
+            .config_propose(
+                "agent:a",
+                "sha256:abc",
+                &propose_params("moved-replay-propose", "/etc/nixos/configuration.nix"),
+            )
+            .expect("propose");
+        engine
+            .tx_test(
+                "agent:a",
+                "sha256:abc",
+                &TxTestParams {
+                    tx_id: tx(&propose.tx_id),
+                },
+            )
+            .expect("test");
+        propose.tx_id
+    };
+
+    let apply_params = TxApplyParams {
+        tx_id: tx(&tx_id),
+        idempotency_key: apply_key.clone(),
+    };
+
+    {
+        let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("moved");
+        let err = engine
+            .tx_apply("agent:a", "sha256:abc", &apply_params)
+            .expect_err("moved base");
+        assert!(matches!(err, EngineError::BaseRevisionMoved));
+        let err = engine
+            .tx_apply("agent:a", "sha256:abc", &apply_params)
+            .expect_err("idempotent replay");
+        assert!(matches!(err, EngineError::BaseRevisionMoved));
+    }
+
+    let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("reopen");
+    let err = engine
+        .tx_apply("agent:a", "sha256:abc", &apply_params)
+        .expect_err("restart replay");
+    assert!(matches!(err, EngineError::BaseRevisionMoved));
+    let status = engine.tx_status(&tx_id).expect("status");
+    assert_eq!(status.state, TransactionState::Rejected);
+}
