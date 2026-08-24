@@ -1,9 +1,18 @@
 //! L01-AC07: sub-second R-class read performance on a deterministic fixture.
 
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    unused_imports,
+    clippy::uninlined_format_args
+)]
+
 use agentbed_broker::adapter::UnresolvedAdapter;
 use agentbed_broker::events::{EventLog, EventRecord};
 use agentbed_broker::transaction::engine::TransactionEngine;
-use agentbed_protocol::wire::{ConfigFileChange, ConfigProposeParams, TxStatusParams};
+use agentbed_protocol::wire::{
+    ConfigFileChange, ConfigProposeParams, IdempotencyKey, TransactionId, TxStatusParams,
+};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -25,8 +34,7 @@ fn scratch() -> PathBuf {
 #[test]
 fn r_class_reads_complete_under_one_second_on_fixture() {
     let dir = scratch();
-    let adapter = UnresolvedAdapter;
-    let engine = TransactionEngine::open(&dir, &adapter).expect("open");
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
     let mut tx_ids = Vec::with_capacity(TX_COUNT);
 
     for i in 0..TX_COUNT {
@@ -35,7 +43,7 @@ fn r_class_reads_complete_under_one_second_on_fixture() {
                 "agent:perf",
                 "sha256:perf",
                 &ConfigProposeParams {
-                    idempotency_key: format!("perf-{i}").try_into().expect("key"),
+                    idempotency_key: IdempotencyKey::new(format!("perf-{i}")).expect("key"),
                     changes: vec![ConfigFileChange {
                         path: "/etc/nixos/configuration.nix".to_owned(),
                         content: format!("{{ n = {i}; }}"),
@@ -58,11 +66,7 @@ fn r_class_reads_complete_under_one_second_on_fixture() {
 
     let start = Instant::now();
     for tx_id in &tx_ids {
-        let _ = engine
-            .tx_status(&TxStatusParams {
-                tx_id: tx_id.clone(),
-            })
-            .expect("status");
+        let _ = engine.tx_status(tx_id).expect("status");
     }
     let cursor = log.latest_cursor().expect("cursor");
     let _ = log.replay(&cursor).expect("replay");

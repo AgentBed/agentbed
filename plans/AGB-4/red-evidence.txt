@@ -1,7 +1,6 @@
-# AGB-4 RED evidence (L01-AC08)
+# AGB-4 RED→GREEN evidence (L01-AC08)
 
-Executed on plan commit `76f4f22a3b576c432eda7b4358b842242d6c35e4` with
-tests-only additions (no production implementation). Command:
+## RED (commit `67acffd`, tests-only on plan `76f4f22`)
 
 ```bash
 cargo test -p agentbed-broker --test transaction_state
@@ -15,11 +14,19 @@ error[E0433]: cannot find `transaction` in `agentbed_broker`
   |
 3 | use agentbed_broker::transaction::state::{
   |                      ^^^^^^^^^^^ could not find `transaction` in `agentbed_broker`
-
-error: could not compile `agentbed-broker` (test "transaction_state") due to 1 previous error
 ```
 
 Additional test binaries added (same compile failure class until implementation):
 `wal_durability`, `transaction_engine`, `events_log`, `tx_status_rpc`, `performance_reads`.
 
-GREEN target: all six L01 test binaries pass; full workspace suite PASS.
+## GREEN (implementation commit on branch `agent/agb-4/l01-durable-transaction-core`)
+
+```bash
+cargo test -p agentbed-broker --test transaction_state   # 5 passed
+cargo test -p agentbed-broker --test wal_durability      # 3 passed
+cargo test -p agentbed-broker --test transaction_engine    # 5 passed
+cargo test -p agentbed-broker --test events_log            # 3 passed
+cargo test -p agentbed-broker --test tx_status_rpc         # 2 passed
+cargo test -p agentbed-broker --test performance_reads     # 1 passed
+cargo test --workspace                                     # PASS (all crates)
+```

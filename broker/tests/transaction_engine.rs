@@ -1,10 +1,19 @@
 //! L01-AC01 / L01-AC03 / L01-AC04: transaction engine integration.
 
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::items_after_statements
+)]
+
 use agentbed_broker::adapter::UnresolvedAdapter;
 use agentbed_broker::transaction::engine::{EngineError, TransactionEngine};
-use agentbed_protocol::dto::transaction::{BaseRevision, TransactionState};
 use agentbed_protocol::digest::Digest;
-use agentbed_protocol::wire::{ConfigFileChange, ConfigProposeParams, TxApplyParams, TxTestParams};
+use agentbed_protocol::dto::transaction::{BaseRevision, TransactionState};
+use agentbed_protocol::wire::{
+    ConfigFileChange, ConfigProposeParams, IdempotencyKey, TransactionId, TxApplyParams,
+    TxTestParams,
+};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -19,25 +28,29 @@ fn scratch() -> PathBuf {
     dir
 }
 
+fn idem(s: &str) -> IdempotencyKey {
+    IdempotencyKey::new(s).expect("idempotency key")
+}
+
+fn tx(s: &str) -> TransactionId {
+    TransactionId::new(s).expect("tx id")
+}
+
 fn base_revision() -> BaseRevision {
     BaseRevision {
         generation: Some("gen-1".to_owned()),
         etc_git_commit: "deadbeef".to_owned(),
-        config_digest: Digest::from_hex(
-            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        )
-        .expect("digest"),
+        config_digest: Digest::from_sha256_bytes([0x22; 32]),
     }
 }
 
 #[test]
 fn idempotent_config_propose_returns_original_result() {
     let dir = scratch();
-    let adapter = UnresolvedAdapter;
-    let engine = TransactionEngine::open(&dir, &adapter).expect("open");
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
 
     let params = ConfigProposeParams {
-        idempotency_key: "prop-1".try_into().expect("key"),
+        idempotency_key: idem("prop-1"),
         changes: vec![ConfigFileChange {
             path: "/etc/nixos/configuration.nix".to_owned(),
             content: "{ }".to_owned(),
@@ -57,10 +70,9 @@ fn idempotent_config_propose_returns_original_result() {
 #[test]
 fn conflicting_idempotency_key_reuse_is_refused() {
     let dir = scratch();
-    let adapter = UnresolvedAdapter;
-    let engine = TransactionEngine::open(&dir, &adapter).expect("open");
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
 
-    let key = "prop-2".try_into().expect("key");
+    let key = idem("prop-2");
     let params_a = ConfigProposeParams {
         idempotency_key: key.clone(),
         changes: vec![ConfigFileChange {
@@ -88,15 +100,14 @@ fn conflicting_idempotency_key_reuse_is_refused() {
 #[test]
 fn moved_base_revision_refuses_apply() {
     let dir = scratch();
-    let adapter = UnresolvedAdapter;
-    let engine = TransactionEngine::open(&dir, &adapter).expect("open");
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
 
     let propose = engine
         .config_propose(
             "agent:a",
             "sha256:abc",
             &ConfigProposeParams {
-                idempotency_key: "prop-3".try_into().expect("key"),
+                idempotency_key: idem("prop-3"),
                 changes: vec![ConfigFileChange {
                     path: "/etc/nixos/configuration.nix".to_owned(),
                     content: "{ }".to_owned(),
@@ -109,7 +120,7 @@ fn moved_base_revision_refuses_apply() {
         .tx_test(
             "agent:a",
             &TxTestParams {
-                tx_id: propose.tx_id.clone(),
+                tx_id: tx(&propose.tx_id),
             },
         )
         .expect("test");
@@ -134,13 +145,13 @@ fn moved_base_revision_refuses_apply() {
         }
     }
 
-    let engine = TransactionEngine::open(&dir, &MovedBaseAdapter).expect("reopen");
+    let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("reopen");
     let err = engine
         .tx_apply(
             "agent:a",
             &TxApplyParams {
-                tx_id: propose.tx_id,
-                idempotency_key: "apply-1".try_into().expect("key"),
+                tx_id: tx(&propose.tx_id),
+                idempotency_key: idem("apply-1"),
             },
         )
         .expect_err("moved base");
@@ -150,15 +161,14 @@ fn moved_base_revision_refuses_apply() {
 #[test]
 fn happy_path_reaches_probation_without_watchdog_states() {
     let dir = scratch();
-    let adapter = UnresolvedAdapter;
-    let engine = TransactionEngine::open(&dir, &adapter).expect("open");
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
 
     let propose = engine
         .config_propose(
             "agent:a",
             "sha256:abc",
             &ConfigProposeParams {
-                idempotency_key: "prop-4".try_into().expect("key"),
+                idempotency_key: idem("prop-4"),
                 changes: vec![ConfigFileChange {
                     path: "/etc/nixos/configuration.nix".to_owned(),
                     content: "{ }".to_owned(),
@@ -172,7 +182,7 @@ fn happy_path_reaches_probation_without_watchdog_states() {
         .tx_test(
             "agent:a",
             &TxTestParams {
-                tx_id: propose.tx_id.clone(),
+                tx_id: tx(&propose.tx_id),
             },
         )
         .expect("test");
@@ -182,8 +192,8 @@ fn happy_path_reaches_probation_without_watchdog_states() {
         .tx_apply(
             "agent:a",
             &TxApplyParams {
-                tx_id: propose.tx_id.clone(),
-                idempotency_key: "apply-2".try_into().expect("key"),
+                tx_id: tx(&propose.tx_id),
+                idempotency_key: idem("apply-2"),
             },
         )
         .expect("apply");
@@ -203,15 +213,14 @@ fn happy_path_reaches_probation_without_watchdog_states() {
 #[test]
 fn recovery_after_restart_preserves_state_without_invented_progress() {
     let dir = scratch();
-    let adapter = UnresolvedAdapter;
     let tx_id = {
-        let engine = TransactionEngine::open(&dir, &adapter).expect("open");
+        let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
         let propose = engine
             .config_propose(
                 "agent:a",
                 "sha256:abc",
                 &ConfigProposeParams {
-                    idempotency_key: "prop-5".try_into().expect("key"),
+                    idempotency_key: idem("prop-5"),
                     changes: vec![ConfigFileChange {
                         path: "/etc/nixos/configuration.nix".to_owned(),
                         content: "{ }".to_owned(),
@@ -224,14 +233,14 @@ fn recovery_after_restart_preserves_state_without_invented_progress() {
             .tx_test(
                 "agent:a",
                 &TxTestParams {
-                    tx_id: propose.tx_id,
+                    tx_id: tx(&propose.tx_id),
                 },
             )
             .expect("test");
         tx_id
     };
 
-    let engine = TransactionEngine::open(&dir, &adapter).expect("reopen");
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("reopen");
     let status = engine.tx_status(&tx_id).expect("status");
     assert_eq!(status.state, TransactionState::Testing);
 }

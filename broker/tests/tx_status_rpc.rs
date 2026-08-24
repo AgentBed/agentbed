@@ -1,20 +1,51 @@
 //! L01-AC05: `tx.status` wired to durable state over RPC v2.
 
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::ptr_arg)]
+
 mod support;
 
+use agentbed_broker::adapter::UnresolvedAdapter;
 use agentbed_broker::config::BrokerConfig;
 use agentbed_broker::dispatch::Dispatcher;
 use agentbed_broker::identity::{Enrollment, TokenStore};
 use agentbed_broker::manifest::ManifestStore;
 use agentbed_broker::observability::CollectingObserver;
 use agentbed_broker::server::Server;
-use agentbed_broker::adapter::UnresolvedAdapter;
+use agentbed_protocol::dto::system_info::{HostSafety, SafetySource, SafetyVector};
 use agentbed_protocol::wire::{ErrorCode, OperationResult};
 use agentbed_protocol::PROTOCOL_VERSION_V2;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use support::{read_response, send_frame, TOKEN_A};
+use support::{read_response, send_frame, AGENT_A, TOKEN_A};
+
+const TOKEN_PROPOSER: &str = "ffffffffffffffffffffffffffffffff";
+const AGENT_PROPOSER: &str = "mcp-client:gate1-proposer";
+
+/// Hermetic adapter with enough rollback coverage for `config.propose` policy.
+struct GenerousAdapter;
+
+impl agentbed_broker::adapter::HostAdapter for GenerousAdapter {
+    fn info(&self) -> agentbed_protocol::dto::system_info::AdapterInfo {
+        UnresolvedAdapter.info()
+    }
+
+    fn safety_vector(&self) -> SafetyVector {
+        SafetyVector {
+            root_config: HostSafety::Generation,
+            packages: HostSafety::Generation,
+            ..UnresolvedAdapter.safety_vector()
+        }
+    }
+
+    fn safety_source(&self) -> SafetySource {
+        SafetySource::AdapterProbe
+    }
+
+    fn current_base_revision(&self) -> agentbed_protocol::dto::transaction::BaseRevision {
+        UnresolvedAdapter.current_base_revision()
+    }
+}
 
 fn scratch() -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
@@ -28,13 +59,22 @@ fn scratch() -> PathBuf {
 }
 
 fn start_with_state(dir: &PathBuf) -> Server {
-    let tokens = TokenStore::from_enrollments([Enrollment {
-        agent_id: "mcp-client:gate0-reader".to_owned(),
-        manifest_ref: "agent.reader.yaml".to_owned(),
-        token: TOKEN_A.to_owned(),
-        revoked: false,
-        expires_at_unix: None,
-    }])
+    let tokens = TokenStore::from_enrollments([
+        Enrollment {
+            agent_id: AGENT_A.to_owned(),
+            manifest_ref: "agent.reader.yaml".to_owned(),
+            token: TOKEN_A.to_owned(),
+            revoked: false,
+            expires_at_unix: None,
+        },
+        Enrollment {
+            agent_id: AGENT_PROPOSER.to_owned(),
+            manifest_ref: "agent.proposer.yaml".to_owned(),
+            token: TOKEN_PROPOSER.to_owned(),
+            revoked: false,
+            expires_at_unix: None,
+        },
+    ])
     .expect("tokens");
 
     let mut config = BrokerConfig {
@@ -49,7 +89,7 @@ fn start_with_state(dir: &PathBuf) -> Server {
     let dispatcher = Arc::new(Dispatcher::new(
         tokens,
         ManifestStore::new(support::manifest_dir()),
-        Box::new(UnresolvedAdapter),
+        Box::new(GenerousAdapter),
         config.state_dir.clone().expect("state_dir"),
     ));
     let observer = Arc::new(CollectingObserver::default());
@@ -59,7 +99,7 @@ fn start_with_state(dir: &PathBuf) -> Server {
 #[test]
 fn tx_status_unknown_id_is_denied_without_sensitive_prose() {
     let dir = scratch();
-    let server = start_with_state(&dir);
+    let mut server = start_with_state(&dir);
     let mut stream = UnixStream::connect(dir.join("broker.sock")).expect("connect");
     let body = format!(
         r#"{{"v":2,"id":"01J-status","op":"tx.status","auth":{{"token":"{TOKEN_A}"}},"params":{{"tx_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV"}}}}"#
@@ -77,11 +117,11 @@ fn tx_status_unknown_id_is_denied_without_sensitive_prose() {
 #[test]
 fn tx_status_returns_durable_state_after_propose() {
     let dir = scratch();
-    let server = start_with_state(&dir);
+    let mut server = start_with_state(&dir);
     let mut stream = UnixStream::connect(dir.join("broker.sock")).expect("connect");
 
     let propose = format!(
-        r#"{{"v":2,"id":"01J-propose","op":"config.propose","auth":{{"token":"{TOKEN_A}"}},"params":{{"idempotency_key":"k1","changes":[{{"path":"/etc/nixos/configuration.nix","content":"{{}}"}}]}}}}"#
+        r#"{{"v":2,"id":"01J-propose","op":"config.propose","auth":{{"token":"{TOKEN_PROPOSER}"}},"params":{{"idempotency_key":"k1","changes":[{{"path":"/etc/nixos/configuration.nix","content":"{{}}"}}]}}}}"#
     );
     send_frame(&mut stream, propose.as_bytes());
     let propose_resp = read_response(&mut stream).expect("propose response");

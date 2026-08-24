@@ -1,9 +1,13 @@
 //! L01-AC02 / L01-AC03: WAL durability and failure injection.
 
-use agentbed_broker::storage::durability::{DurabilityError, FaultInjectedDurability, RealDurability};
+#![allow(clippy::expect_used, clippy::unwrap_used, unused_variables)]
+
+use agentbed_broker::storage::durability::{
+    DurabilityError, FaultInjectedDurability, RealDurability,
+};
 use agentbed_broker::storage::wal::{WalRecord, WalStore};
-use agentbed_protocol::dto::transaction::{BaseRevision, TransactionState};
 use agentbed_protocol::digest::Digest;
+use agentbed_protocol::dto::transaction::{BaseRevision, TransactionState};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -26,17 +30,11 @@ fn sample_record(seq: u64, state: TransactionState) -> WalRecord {
         state,
         idempotency_key: Some("idem-1".to_owned()),
         agent_id: "agent:test".to_owned(),
-        manifest_digest: Digest::from_hex(
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        )
-        .expect("digest"),
+        manifest_digest: Digest::from_sha256_bytes([0; 32]),
         base_revision: BaseRevision {
             generation: Some("gen-1".to_owned()),
             etc_git_commit: "abc".to_owned(),
-            config_digest: Digest::from_hex(
-                "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            )
-            .expect("digest"),
+            config_digest: Digest::from_sha256_bytes([0x11; 32]),
         },
         effect_set: vec![agentbed_protocol::wire::EffectClass::D],
         diff: "diff".to_owned(),
@@ -52,12 +50,12 @@ fn persist_before_transition_never_exposes_state_before_rename() {
     let durability = Arc::new(RealDurability);
     let store = WalStore::open(&dir, durability.clone()).expect("open");
 
-    let fault = FaultInjectedDurability::new(durability);
+    let fault = Arc::new(FaultInjectedDurability::new(durability));
     fault.fail_after_write_before_fsync(true);
-    let store = WalStore::open(&dir, Arc::new(fault.clone())).expect("reopen");
+    let mut store = WalStore::open(&dir, fault).expect("reopen");
 
     let err = store
-        .append_transition(sample_record(1, TransactionState::Proposed))
+        .append_transition(&sample_record(1, TransactionState::Proposed))
         .expect_err("fsync failure must propagate");
     assert!(matches!(err, DurabilityError::FsyncFailed));
 
@@ -70,10 +68,10 @@ fn persist_before_transition_never_exposes_state_before_rename() {
 fn atomic_rename_makes_record_visible_only_after_parent_fsync() {
     let dir = scratch();
     let durability = Arc::new(RealDurability);
-    let store = WalStore::open(&dir, durability).expect("open");
+    let mut store = WalStore::open(&dir, durability).expect("open");
 
     store
-        .append_transition(sample_record(1, TransactionState::Proposed))
+        .append_transition(&sample_record(1, TransactionState::Proposed))
         .expect("append");
     let recovered = WalStore::open(&dir, Arc::new(RealDurability)).expect("recover");
     assert_eq!(recovered.checkpoint_seq(), 1);
@@ -86,9 +84,9 @@ fn atomic_rename_makes_record_visible_only_after_parent_fsync() {
 fn truncated_checkpoint_enters_safe_mode_on_recovery() {
     let dir = scratch();
     let durability = Arc::new(RealDurability);
-    let store = WalStore::open(&dir, durability).expect("open");
+    let mut store = WalStore::open(&dir, durability).expect("open");
     store
-        .append_transition(sample_record(1, TransactionState::Proposed))
+        .append_transition(&sample_record(1, TransactionState::Proposed))
         .expect("append");
 
     let checkpoint = dir.join("checkpoint.json");

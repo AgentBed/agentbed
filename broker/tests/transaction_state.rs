@@ -1,5 +1,7 @@
 //! L01-AC01: broker-owned transaction state transition table.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use agentbed_broker::transaction::state::{
     broker_may_enter, is_broker_owned, is_watchdog_owned, TransactionState,
 };

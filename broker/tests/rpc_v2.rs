@@ -130,7 +130,7 @@ fn unsupported_operation_version_is_refused_on_v2() {
 }
 
 #[test]
-fn v2_tx_status_validates_params_then_refuses_execution_at_l00() {
+fn v2_tx_status_validates_params_then_returns_denied_for_unknown_tx() {
     let harness = Harness::start();
     let mut stream = harness.connect();
     send_frame(
@@ -143,7 +143,7 @@ fn v2_tx_status_validates_params_then_refuses_execution_at_l00() {
     );
     let response = read_response(&mut stream).expect("a response");
     assert_eq!(response.v, PROTOCOL_VERSION_V2);
-    assert_eq!(response.error.expect("error").code, ErrorCode::Internal);
+    assert_eq!(response.error.expect("error").code, ErrorCode::Denied);
 }
 
 #[test]

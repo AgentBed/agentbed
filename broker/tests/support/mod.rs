@@ -95,16 +95,22 @@ impl Harness {
         let mut config = BrokerConfig {
             socket_path: dir.join("broker.sock"),
             manifest_dir: Some(manifest_dir()),
+            state_dir: Some(dir.join("state")),
             read_timeout: IO_TIMEOUT,
             write_timeout: IO_TIMEOUT,
             ..BrokerConfig::default()
         };
         customize(&mut config);
+        let state_dir = config
+            .state_dir
+            .clone()
+            .unwrap_or_else(|| dir.join("state"));
         let audit = CollectingObserver::default();
         let dispatcher = Arc::new(Dispatcher::new(
             tokens,
             ManifestStore::new(manifest_dir()),
             Box::new(UnresolvedAdapter),
+            state_dir,
         ));
         let server = Server::start(&config, dispatcher, Arc::new(audit.clone()))
             .expect("broker binds its socket");

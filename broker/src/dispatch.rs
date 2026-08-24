@@ -35,25 +35,29 @@ use crate::peercred::PeerCredentials;
 use crate::policy::{evaluate, CallAdmission, CallDescriptor, Decision};
 use crate::quota::QuotaLedger;
 use crate::tools::{config_propose, system_info, transaction};
+use crate::transaction::engine::{EngineError, TransactionEngine};
 use agentbed_protocol::digest::Digest;
+use agentbed_protocol::dto::transaction::ConfigProposeResult;
 use agentbed_protocol::strict;
 use agentbed_protocol::wire::{
-    CallBinding, ConfigProposeParams, EffectClass, ErrorCode, OpName, OperationResult, Request,
-    RequestId, Response, ResponseError, SystemInfoParams, TxApplyParams, TxRollbackParams,
-    TxStatusParams, TxTestParams,
+    CallBinding, ConfigProposeParams, DecisionStage, EffectClass, ErrorCode, OpName,
+    OperationResult, Request, RequestId, Response, ResponseError, SystemInfoParams, TxApplyParams,
+    TxRollbackParams, TxStatusParams, TxTestParams,
 };
 use agentbed_protocol::PROTOCOL_VERSION_V1;
 use agentbed_schemas::{validate, SchemaKind};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
+use std::sync::Arc;
 
 /// Everything the request path needs, assembled once at startup.
 pub struct Dispatcher {
     tokens: TokenStore,
     manifests: ManifestStore,
-    adapter: Box<dyn HostAdapter>,
+    adapter: Arc<dyn HostAdapter>,
     quotas: QuotaLedger,
+    transactions: Arc<TransactionEngine>,
 }
 
 // Hand-written rather than derived: `Debug` on the dispatcher must never be
@@ -69,16 +73,25 @@ impl std::fmt::Debug for Dispatcher {
 impl Dispatcher {
     /// Assemble a dispatcher.
     #[must_use]
+    #[allow(clippy::expect_used)]
     pub fn new(
         tokens: TokenStore,
         manifests: ManifestStore,
         adapter: Box<dyn HostAdapter>,
+        state_dir: impl AsRef<std::path::Path>,
     ) -> Self {
+        let state_dir = state_dir.as_ref().to_path_buf();
+        let adapter: Arc<dyn HostAdapter> = Arc::from(adapter);
+        let transactions = Arc::new(
+            TransactionEngine::open_owned(&state_dir, Arc::clone(&adapter))
+                .expect("transaction engine initializes"),
+        );
         Dispatcher {
             tokens,
             manifests,
             adapter,
             quotas: QuotaLedger::default(),
+            transactions,
         }
     }
 
@@ -148,20 +161,7 @@ impl Dispatcher {
                         config_propose::OP,
                     );
                 }
-                self.contract_only(
-                    &request,
-                    &agent,
-                    peer,
-                    observer,
-                    protocol,
-                    config_propose::describe_call(),
-                    config_propose::OP,
-                    SchemaKind::ConfigProposeRequest,
-                    |params| {
-                        serde_json::from_value::<ConfigProposeParams>(params.clone())
-                            .map_err(|_| "params_rejected")
-                    },
-                )
+                self.config_propose(&request, &agent, peer, observer, protocol)
             }
             OpName::TxTest => {
                 if request.op_version != transaction::test::VERSION {
@@ -173,20 +173,7 @@ impl Dispatcher {
                         transaction::test::OP,
                     );
                 }
-                self.contract_only(
-                    &request,
-                    &agent,
-                    peer,
-                    observer,
-                    protocol,
-                    transaction::test::describe_call(),
-                    transaction::test::OP,
-                    SchemaKind::TxTestRequest,
-                    |params| {
-                        serde_json::from_value::<TxTestParams>(params.clone())
-                            .map_err(|_| "params_rejected")
-                    },
-                )
+                self.tx_test(&request, &agent, peer, observer, protocol)
             }
             OpName::TxApply => {
                 if request.op_version != transaction::apply::VERSION {
@@ -198,20 +185,7 @@ impl Dispatcher {
                         transaction::apply::OP,
                     );
                 }
-                self.contract_only(
-                    &request,
-                    &agent,
-                    peer,
-                    observer,
-                    protocol,
-                    transaction::apply::describe_call(),
-                    transaction::apply::OP,
-                    SchemaKind::TxApplyRequest,
-                    |params| {
-                        serde_json::from_value::<TxApplyParams>(params.clone())
-                            .map_err(|_| "params_rejected")
-                    },
-                )
+                self.tx_apply(&request, &agent, peer, observer, protocol)
             }
             OpName::TxRollback => {
                 if request.op_version != transaction::rollback::VERSION {
@@ -248,22 +222,331 @@ impl Dispatcher {
                         transaction::status::OP,
                     );
                 }
-                self.contract_only(
-                    &request,
-                    &agent,
+                self.tx_status(&request, &agent, peer, observer, protocol)
+            }
+        }
+    }
+
+    fn config_propose(
+        &self,
+        request: &Request,
+        agent: &AgentContext,
+        peer: PeerCredentials,
+        observer: &dyn ObservationSink,
+        protocol: u8,
+    ) -> Response {
+        self.execute_v2(
+            request,
+            agent,
+            peer,
+            observer,
+            protocol,
+            &config_propose::describe_call(),
+            config_propose::OP,
+            SchemaKind::ConfigProposeRequest,
+            |params| {
+                serde_json::from_value::<ConfigProposeParams>(params.clone())
+                    .map_err(|_| "params_rejected")
+            },
+            |manifest_digest, params| {
+                let outcome = self.transactions.config_propose(
+                    agent.agent_id(),
+                    &manifest_digest.to_string(),
+                    params,
+                )?;
+                Ok(OperationResult::ConfigPropose(Box::new(
+                    ConfigProposeResult {
+                        tx_id: outcome.tx_id,
+                        diff: outcome.diff,
+                        test_plan: outcome.test_plan,
+                        affected_resources: outcome.affected_resources,
+                        base_revision: outcome.base_revision,
+                    },
+                )))
+            },
+        )
+    }
+
+    fn tx_test(
+        &self,
+        request: &Request,
+        agent: &AgentContext,
+        peer: PeerCredentials,
+        observer: &dyn ObservationSink,
+        protocol: u8,
+    ) -> Response {
+        self.execute_v2(
+            request,
+            agent,
+            peer,
+            observer,
+            protocol,
+            &transaction::test::describe_call(),
+            transaction::test::OP,
+            SchemaKind::TxTestRequest,
+            |params| {
+                serde_json::from_value::<TxTestParams>(params.clone())
+                    .map_err(|_| "params_rejected")
+            },
+            |_manifest_digest, params| {
+                let step = self.transactions.tx_test(agent.agent_id(), params)?;
+                Ok(OperationResult::TxTest(Box::new(step)))
+            },
+        )
+    }
+
+    fn tx_apply(
+        &self,
+        request: &Request,
+        agent: &AgentContext,
+        peer: PeerCredentials,
+        observer: &dyn ObservationSink,
+        protocol: u8,
+    ) -> Response {
+        self.execute_v2(
+            request,
+            agent,
+            peer,
+            observer,
+            protocol,
+            &transaction::apply::describe_call(),
+            transaction::apply::OP,
+            SchemaKind::TxApplyRequest,
+            |params| {
+                serde_json::from_value::<TxApplyParams>(params.clone())
+                    .map_err(|_| "params_rejected")
+            },
+            |_manifest_digest, params| {
+                let step = self.transactions.tx_apply(agent.agent_id(), params)?;
+                Ok(OperationResult::TxApply(Box::new(step)))
+            },
+        )
+    }
+
+    fn tx_status(
+        &self,
+        request: &Request,
+        agent: &AgentContext,
+        peer: PeerCredentials,
+        observer: &dyn ObservationSink,
+        protocol: u8,
+    ) -> Response {
+        self.execute_v2(
+            request,
+            agent,
+            peer,
+            observer,
+            protocol,
+            &transaction::status::describe_call(),
+            transaction::status::OP,
+            SchemaKind::TxStatusRequest,
+            |params| {
+                serde_json::from_value::<TxStatusParams>(params.clone())
+                    .map_err(|_| "params_rejected")
+            },
+            |_manifest_digest, params| {
+                let status = self.transactions.tx_status_params(params)?;
+                Ok(OperationResult::TxStatus(Box::new(status)))
+            },
+        )
+    }
+
+    /// Shared v2 path: validate, digest, policy, then execute against the engine.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn execute_v2<P, F, X>(
+        &self,
+        request: &Request,
+        agent: &AgentContext,
+        peer: PeerCredentials,
+        observer: &dyn ObservationSink,
+        protocol: u8,
+        call: &CallDescriptor,
+        op: &'static str,
+        schema: SchemaKind,
+        project: F,
+        execute: X,
+    ) -> Response
+    where
+        P: DeserializeOwned + Serialize + Clone,
+        F: FnOnce(&Value) -> Result<P, &'static str>,
+        X: FnOnce(&Digest, &P) -> Result<OperationResult, EngineError>,
+    {
+        let id = request.id.clone();
+
+        let Ok(typed) = project(&request.params) else {
+            return Self::refuse(
+                &id,
+                agent,
+                peer,
+                observer,
+                protocol,
+                ResponseError::new(ErrorCode::InvalidRequest),
+                "params_rejected",
+                None,
+                op,
+                call.effect_set.clone(),
+            );
+        };
+
+        let operation_digest = match Self::project_and_digest_with(
+            protocol,
+            op,
+            request.op_version,
+            &request.params,
+            schema,
+            |_| Ok(typed.clone()),
+        ) {
+            Ok(digest) => digest,
+            Err((error, reason)) => {
+                return Self::refuse(
+                    &id,
+                    agent,
                     peer,
                     observer,
                     protocol,
-                    transaction::status::describe_call(),
-                    transaction::status::OP,
-                    SchemaKind::TxStatusRequest,
-                    |params| {
-                        serde_json::from_value::<TxStatusParams>(params.clone())
-                            .map_err(|_| "params_rejected")
-                    },
+                    error,
+                    reason,
+                    None,
+                    op,
+                    call.effect_set.clone(),
                 )
             }
+        };
+
+        let Ok(manifest) = self.manifests.load(agent.manifest_ref()) else {
+            return Self::refuse(
+                &id,
+                agent,
+                peer,
+                observer,
+                protocol,
+                ResponseError::new(ErrorCode::Denied),
+                "manifest_unavailable",
+                Some(operation_digest),
+                op,
+                call.effect_set.clone(),
+            );
+        };
+
+        let admission = AgentAdmission {
+            ledger: &self.quotas,
+            agent_id: agent.agent_id(),
+        };
+        let decision = evaluate(call, &manifest, &self.adapter.safety_vector(), &admission);
+
+        match decision {
+            Decision::Refuse {
+                code,
+                stage,
+                reason,
+            } => {
+                observer.record(CallObservation {
+                    request_id: Some(id.to_string()),
+                    agent_id: Some(agent.agent_id().to_owned()),
+                    peer,
+                    op: Some(op),
+                    effect_set: call.effect_set.clone(),
+                    manifest_digest: Some(manifest.digest().clone()),
+                    operation_digest: Some(operation_digest),
+                    allowed: false,
+                    stage: Some(stage),
+                    error: Some(code),
+                    reason,
+                });
+                Response::failed(Some(id), protocol, ResponseError::at_stage(code, stage))
+            }
+            Decision::Allow => match execute(manifest.digest(), &typed) {
+                Ok(result) => {
+                    let binding = CallBinding {
+                        agent_id: agent.agent_id().to_owned(),
+                        manifest_digest: manifest.digest().clone(),
+                        effect_set: call.effect_set.clone(),
+                        operation_digest: operation_digest.clone(),
+                    };
+                    observer.record(CallObservation {
+                        request_id: Some(id.to_string()),
+                        agent_id: Some(agent.agent_id().to_owned()),
+                        peer,
+                        op: Some(op),
+                        effect_set: call.effect_set.clone(),
+                        manifest_digest: Some(manifest.digest().clone()),
+                        operation_digest: Some(operation_digest),
+                        allowed: true,
+                        stage: None,
+                        error: None,
+                        reason: "authorized",
+                    });
+                    Response::ok(id, protocol, result, binding)
+                }
+                Err(engine_err) => Self::engine_failure(
+                    &id,
+                    agent,
+                    peer,
+                    observer,
+                    protocol,
+                    op,
+                    call.effect_set.clone(),
+                    manifest.digest(),
+                    operation_digest,
+                    &engine_err,
+                ),
+            },
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn engine_failure(
+        id: &RequestId,
+        agent: &AgentContext,
+        peer: PeerCredentials,
+        observer: &dyn ObservationSink,
+        protocol: u8,
+        op: &'static str,
+        effect_set: Vec<EffectClass>,
+        manifest_digest: &Digest,
+        operation_digest: Digest,
+        err: &EngineError,
+    ) -> Response {
+        let (code, stage, reason) = match err {
+            EngineError::NotFound
+            | EngineError::BaseRevisionMoved
+            | EngineError::IdempotencyConflict => (
+                ErrorCode::Denied,
+                DecisionStage::OperationPolicy,
+                "transaction_refused",
+            ),
+            EngineError::SafeMode
+            | EngineError::InvalidTransition
+            | EngineError::WatchdogAuthorityRequired => (
+                ErrorCode::Denied,
+                DecisionStage::ForbiddenClass,
+                "transaction_refused",
+            ),
+            EngineError::Storage(_) => (
+                ErrorCode::Internal,
+                DecisionStage::ForbiddenClass,
+                "storage_failure",
+            ),
+        };
+        observer.record(CallObservation {
+            request_id: Some(id.to_string()),
+            agent_id: Some(agent.agent_id().to_owned()),
+            peer,
+            op: Some(op),
+            effect_set,
+            manifest_digest: Some(manifest_digest.clone()),
+            operation_digest: Some(operation_digest),
+            allowed: false,
+            stage: Some(stage),
+            error: Some(code),
+            reason,
+        });
+        let error = if matches!(code, ErrorCode::Internal) {
+            ResponseError::new(code)
+        } else {
+            ResponseError::at_stage(code, stage)
+        };
+        Response::failed(Some(id.clone()), protocol, error)
     }
 
     fn system_info(

@@ -49,6 +49,7 @@ impl Fixture {
 
         let config = BrokerConfig {
             socket_path: dir.join("broker.sock"),
+            state_dir: Some(dir.join("state")),
             read_timeout: Duration::from_secs(5),
             write_timeout: Duration::from_secs(5),
             ..BrokerConfig::default()
@@ -57,6 +58,7 @@ impl Fixture {
             tokens,
             ManifestStore::new(manifest_dir()),
             Box::new(UnresolvedAdapter),
+            config.state_dir.clone().expect("state_dir"),
         ));
         let audit: Arc<dyn ObservationSink> = Arc::new(StderrObserver);
         let server = Server::start(&config, dispatcher, audit).expect("broker starts");

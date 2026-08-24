@@ -1,5 +1,7 @@
 //! L01-AC06: durable `agentbed://events` append log and cursor replay.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use agentbed_broker::events::{EventCursor, EventLog, EventRecord};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -84,7 +86,7 @@ fn malformed_and_beyond_tail_cursors_are_rejected() {
         })
         .expect("append");
 
-    assert!(log.replay(&EventCursor::parse("not-valid")).is_err());
+    assert!(EventCursor::parse("not-valid").is_err());
     assert!(log
         .replay(&EventCursor::foreign("other-log", first.seq))
         .is_err());

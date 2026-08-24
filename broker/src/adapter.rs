@@ -1,6 +1,4 @@
 //! Host adapters and the honest default.
-//!
-//! ADR §5.3 and `docs/effects.md` §2: `system.info` reports rollback coverage
 //! *per resource*, and D/M steps against a resource below the manifest minimum
 //! — or at `none` — are refused.
 //!
@@ -15,10 +13,12 @@
 //! the result carries [`SafetySource`] so the two are distinguishable: one is a
 //! measurement, the other is the absence of one. Both refuse D/M steps.
 
+use agentbed_protocol::digest::Digest;
 use agentbed_protocol::dto::system_info::{
     AdapterInfo, DataSafety, ExternalEffectsSafety, HostSafety, RecoveryRequires, SafetySource,
     SafetyVector, ServiceStateSafety,
 };
+use agentbed_protocol::dto::transaction::BaseRevision;
 
 /// What the broker needs from a host adapter.
 pub trait HostAdapter: Send + Sync {
@@ -30,6 +30,9 @@ pub trait HostAdapter: Send + Sync {
 
     /// Where those values came from.
     fn safety_source(&self) -> SafetySource;
+
+    /// Active base revision for transaction base-movement checks (`effects.md` §3).
+    fn current_base_revision(&self) -> BaseRevision;
 }
 
 /// The Gate 0 adapter: resolves nothing, claims nothing.
@@ -70,6 +73,14 @@ impl HostAdapter for UnresolvedAdapter {
 
     fn safety_source(&self) -> SafetySource {
         SafetySource::UnresolvedAdapter
+    }
+
+    fn current_base_revision(&self) -> BaseRevision {
+        BaseRevision {
+            generation: Some("gen-1".to_owned()),
+            etc_git_commit: "deadbeef".to_owned(),
+            config_digest: Digest::from_sha256_bytes([0x22; 32]),
+        }
     }
 }
 
