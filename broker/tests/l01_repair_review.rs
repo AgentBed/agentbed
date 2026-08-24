@@ -1,4 +1,10 @@
 //! L01 repair tests for native review #5010391942 (PR #20 @ daaaae0).
+//! Review #5011747127 additions cover immutable WAL payload drift, conflicting
+//! `config.propose` retry after idempotency-index faults, and moved-base REJECTED
+//! idempotency ordering. `WalRecord::result_json` is transition-mutable (each
+//! record carries that transition's serialized outcome) and is excluded from
+//! cross-record immutability checks alongside `seq`, `state`, `idempotency_key`,
+//! and `idem_fingerprint`, which are per-transition metadata rather than tx identity.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -1055,4 +1061,333 @@ fn idempotency_index_rename_failure_restart_replays_authoritatively() {
         .expect("restart replay");
     assert_eq!(replay.tx_id, failed_tx);
     assert_eq!(wal_record_count(&dir), 1);
+}
+
+// --- Review #5011747127: immutable WAL payload drift (RED) ---
+
+#[test]
+fn immutable_effect_set_change_in_wal_enters_safe_mode() {
+    let dir = scratch();
+    let tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let proposed = wal_record(1, tx, TransactionState::Proposed, "agent:a", 0);
+    let mut testing = wal_record(2, tx, TransactionState::Testing, "agent:a", 0);
+    testing.effect_set = vec![EffectClass::R];
+    append_wal_records(&dir, &[proposed, testing]);
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn immutable_diff_change_in_wal_enters_safe_mode() {
+    let dir = scratch();
+    let tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let proposed = wal_record(1, tx, TransactionState::Proposed, "agent:a", 0);
+    let mut testing = wal_record(2, tx, TransactionState::Testing, "agent:a", 0);
+    testing.diff = "mutated diff payload".to_owned();
+    append_wal_records(&dir, &[proposed, testing]);
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn immutable_affected_resources_change_in_wal_enters_safe_mode() {
+    let dir = scratch();
+    let tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let proposed = wal_record(1, tx, TransactionState::Proposed, "agent:a", 0);
+    let mut testing = wal_record(2, tx, TransactionState::Testing, "agent:a", 0);
+    testing.affected_resources = vec!["other_resource".to_owned()];
+    append_wal_records(&dir, &[proposed, testing]);
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn immutable_approval_ref_change_in_wal_enters_safe_mode() {
+    let dir = scratch();
+    let tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let proposed = wal_record(1, tx, TransactionState::Proposed, "agent:a", 0);
+    let mut testing = wal_record(2, tx, TransactionState::Testing, "agent:a", 0);
+    testing.approval_ref = Some("approval-xyz".to_owned());
+    append_wal_records(&dir, &[proposed, testing]);
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+// --- Review #5011747127: conflicting config.propose after idempotency fault (RED) ---
+
+fn original_propose_tx_id(dir: &Path) -> String {
+    let durability = Arc::new(RealDurability);
+    let store = WalStore::open(dir.join("wal"), durability).expect("wal");
+    store.load_records().expect("load")[0].tx_id.clone()
+}
+
+#[test]
+fn conflicting_propose_after_idempotency_write_failure_immediate() {
+    let dir = scratch();
+    let key = "conflict-write-immediate";
+    let first = propose_params(key, "/etc/nixos/a.nix");
+    let conflicting = propose_params(key, "/etc/nixos/b.nix");
+    let idem_dir = dir.join("idempotency");
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+    set_path_readonly(&idem_dir, true);
+    let err = engine
+        .config_propose("agent:a", "sha256:abc", &first)
+        .expect_err("idem write failure");
+    assert!(matches!(err, EngineError::Storage(_)));
+    set_path_readonly(&idem_dir, false);
+
+    let original_tx = original_propose_tx_id(&dir);
+    assert_eq!(wal_record_count(&dir), 1);
+    assert_eq!(event_count(&dir), 0);
+
+    let err = engine
+        .config_propose("agent:a", "sha256:abc", &conflicting)
+        .expect_err("conflicting retry");
+    assert!(matches!(err, EngineError::IdempotencyConflict));
+    assert_eq!(original_propose_tx_id(&dir), original_tx);
+    assert_eq!(wal_record_count(&dir), 1);
+    assert_eq!(event_count(&dir), 0);
+}
+
+#[test]
+fn conflicting_propose_after_idempotency_write_failure_restart() {
+    let dir = scratch();
+    let key = "conflict-write-restart";
+    let first = propose_params(key, "/etc/nixos/a.nix");
+    let conflicting = propose_params(key, "/etc/nixos/b.nix");
+    let idem_dir = dir.join("idempotency");
+    let original_tx = {
+        let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+        set_path_readonly(&idem_dir, true);
+        let _ = engine
+            .config_propose("agent:a", "sha256:abc", &first)
+            .expect_err("idem write failure");
+        set_path_readonly(&idem_dir, false);
+        original_propose_tx_id(&dir)
+    };
+
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("reopen");
+    let err = engine
+        .config_propose("agent:a", "sha256:abc", &conflicting)
+        .expect_err("conflicting retry after restart");
+    assert!(matches!(err, EngineError::IdempotencyConflict));
+    assert_eq!(original_propose_tx_id(&dir), original_tx);
+    assert_eq!(wal_record_count(&dir), 1);
+    assert_eq!(event_count(&dir), 0);
+}
+
+#[test]
+fn conflicting_propose_after_idempotency_rename_failure_immediate() {
+    let dir = scratch();
+    let key = "conflict-rename-immediate";
+    let first = propose_params(key, "/etc/nixos/a.nix");
+    let conflicting = propose_params(key, "/etc/nixos/b.nix");
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+    let blocker = idempotency_binding_path(&dir, "agent:a", "config.propose", key);
+    std::fs::create_dir_all(&blocker).expect("rename blocker");
+
+    let err = engine
+        .config_propose("agent:a", "sha256:abc", &first)
+        .expect_err("rename failure");
+    assert!(matches!(err, EngineError::Storage(_)));
+    std::fs::remove_dir_all(&blocker).expect("clear blocker");
+
+    let original_tx = original_propose_tx_id(&dir);
+    assert_eq!(wal_record_count(&dir), 1);
+    assert_eq!(event_count(&dir), 0);
+
+    let err = engine
+        .config_propose("agent:a", "sha256:abc", &conflicting)
+        .expect_err("conflicting retry");
+    assert!(matches!(err, EngineError::IdempotencyConflict));
+    assert_eq!(original_propose_tx_id(&dir), original_tx);
+    assert_eq!(wal_record_count(&dir), 1);
+    assert_eq!(event_count(&dir), 0);
+}
+
+#[test]
+fn conflicting_propose_after_idempotency_rename_failure_restart() {
+    let dir = scratch();
+    let key = "conflict-rename-restart";
+    let first = propose_params(key, "/etc/nixos/a.nix");
+    let conflicting = propose_params(key, "/etc/nixos/b.nix");
+    let original_tx = {
+        let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+        let blocker = idempotency_binding_path(&dir, "agent:a", "config.propose", key);
+        std::fs::create_dir_all(&blocker).expect("rename blocker");
+        let _ = engine
+            .config_propose("agent:a", "sha256:abc", &first)
+            .expect_err("rename failure");
+        std::fs::remove_dir_all(&blocker).expect("clear blocker");
+        original_propose_tx_id(&dir)
+    };
+
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("reopen");
+    let err = engine
+        .config_propose("agent:a", "sha256:abc", &conflicting)
+        .expect_err("conflicting retry after restart");
+    assert!(matches!(err, EngineError::IdempotencyConflict));
+    assert_eq!(original_propose_tx_id(&dir), original_tx);
+    assert_eq!(wal_record_count(&dir), 1);
+    assert_eq!(event_count(&dir), 0);
+}
+
+// --- Review #5011747127: moved-base REJECTED idempotency ordering (RED) ---
+
+fn setup_moved_base_apply(dir: &Path, apply_key: &str) -> (String, TxApplyParams) {
+    let tx_id = {
+        let engine = TransactionEngine::open(dir, UnresolvedAdapter).expect("open");
+        let propose = engine
+            .config_propose(
+                "agent:a",
+                "sha256:abc",
+                &propose_params(
+                    &format!("{apply_key}-propose"),
+                    "/etc/nixos/configuration.nix",
+                ),
+            )
+            .expect("propose");
+        engine
+            .tx_test(
+                "agent:a",
+                "sha256:abc",
+                &TxTestParams {
+                    tx_id: tx(&propose.tx_id),
+                },
+            )
+            .expect("test");
+        propose.tx_id
+    };
+    let apply_params = TxApplyParams {
+        tx_id: tx(&tx_id),
+        idempotency_key: idem(apply_key),
+    };
+    (tx_id, apply_params)
+}
+
+#[test]
+fn moved_base_rejection_after_idempotency_write_failure_immediate_replay() {
+    let dir = scratch();
+    let apply_key = "moved-idem-write-immediate";
+    let (tx_id, apply_params) = setup_moved_base_apply(&dir, apply_key);
+    let idem_dir = dir.join("idempotency");
+    let wal_before;
+    let events_before;
+    {
+        let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("moved");
+        set_path_readonly(&idem_dir, true);
+        wal_before = wal_record_count(&dir);
+        let err = engine
+            .tx_apply("agent:a", "sha256:abc", &apply_params)
+            .expect_err("idem write failure");
+        assert!(matches!(err, EngineError::Storage(_)));
+        events_before = event_count(&dir);
+        set_path_readonly(&idem_dir, false);
+
+        let err = engine
+            .tx_apply("agent:a", "sha256:abc", &apply_params)
+            .expect_err("replay refusal");
+        assert!(matches!(err, EngineError::BaseRevisionMoved));
+        assert_eq!(wal_record_count(&dir), wal_before);
+        assert_eq!(event_count(&dir), events_before);
+    }
+
+    let status = TransactionEngine::open(&dir, MovedBaseAdapter)
+        .expect("status engine")
+        .tx_status(&tx_id)
+        .expect("status");
+    assert_eq!(status.state, TransactionState::Rejected);
+}
+
+#[test]
+fn moved_base_rejection_after_idempotency_write_failure_restart_replay() {
+    let dir = scratch();
+    let apply_key = "moved-idem-write-restart";
+    let (tx_id, apply_params) = setup_moved_base_apply(&dir, apply_key);
+    let idem_dir = dir.join("idempotency");
+    let wal_before;
+    let events_before;
+    {
+        let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("moved");
+        set_path_readonly(&idem_dir, true);
+        wal_before = wal_record_count(&dir);
+        let err = engine
+            .tx_apply("agent:a", "sha256:abc", &apply_params)
+            .expect_err("idem write failure");
+        assert!(matches!(err, EngineError::Storage(_)));
+        events_before = event_count(&dir);
+        set_path_readonly(&idem_dir, false);
+    }
+
+    let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("reopen");
+    let err = engine
+        .tx_apply("agent:a", "sha256:abc", &apply_params)
+        .expect_err("replay refusal after restart");
+    assert!(matches!(err, EngineError::BaseRevisionMoved));
+    assert_eq!(wal_record_count(&dir), wal_before);
+    assert_eq!(event_count(&dir), events_before);
+
+    let status = engine.tx_status(&tx_id).expect("status");
+    assert_eq!(status.state, TransactionState::Rejected);
+}
+
+#[test]
+fn moved_base_rejection_after_idempotency_rename_failure_immediate_replay() {
+    let dir = scratch();
+    let apply_key = "moved-idem-rename-immediate";
+    let (tx_id, apply_params) = setup_moved_base_apply(&dir, apply_key);
+    let blocker = idempotency_binding_path(&dir, "agent:a", "tx.apply", apply_key);
+    let wal_before;
+    let events_before;
+    {
+        let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("moved");
+        std::fs::create_dir_all(&blocker).expect("rename blocker");
+        wal_before = wal_record_count(&dir);
+        let err = engine
+            .tx_apply("agent:a", "sha256:abc", &apply_params)
+            .expect_err("rename failure");
+        assert!(matches!(err, EngineError::Storage(_)));
+        events_before = event_count(&dir);
+        std::fs::remove_dir_all(&blocker).expect("clear blocker");
+
+        let err = engine
+            .tx_apply("agent:a", "sha256:abc", &apply_params)
+            .expect_err("replay refusal");
+        assert!(matches!(err, EngineError::BaseRevisionMoved));
+        assert_eq!(wal_record_count(&dir), wal_before);
+        assert_eq!(event_count(&dir), events_before);
+    }
+
+    let status = TransactionEngine::open(&dir, MovedBaseAdapter)
+        .expect("status engine")
+        .tx_status(&tx_id)
+        .expect("status");
+    assert_eq!(status.state, TransactionState::Rejected);
+}
+
+#[test]
+fn moved_base_rejection_after_idempotency_rename_failure_restart_replay() {
+    let dir = scratch();
+    let apply_key = "moved-idem-rename-restart";
+    let (tx_id, apply_params) = setup_moved_base_apply(&dir, apply_key);
+    let blocker = idempotency_binding_path(&dir, "agent:a", "tx.apply", apply_key);
+    let wal_before;
+    let events_before;
+    {
+        let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("moved");
+        std::fs::create_dir_all(&blocker).expect("rename blocker");
+        wal_before = wal_record_count(&dir);
+        let _ = engine
+            .tx_apply("agent:a", "sha256:abc", &apply_params)
+            .expect_err("rename failure");
+        events_before = event_count(&dir);
+        std::fs::remove_dir_all(&blocker).expect("clear blocker");
+    }
+
+    let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("reopen");
+    let err = engine
+        .tx_apply("agent:a", "sha256:abc", &apply_params)
+        .expect_err("replay refusal after restart");
+    assert!(matches!(err, EngineError::BaseRevisionMoved));
+    assert_eq!(wal_record_count(&dir), wal_before);
+    assert_eq!(event_count(&dir), events_before);
+
+    let status = engine.tx_status(&tx_id).expect("status");
+    assert_eq!(status.state, TransactionState::Rejected);
 }
