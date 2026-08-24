@@ -62,3 +62,19 @@ cargo clippy --workspace --all-targets -- -D warnings    # PASS
 cargo build --workspace --all-targets                    # PASS
 cargo test --workspace                                   # PASS
 ```
+
+## Repair RED round 2 (native review #5010707523 @ `d105e21`, tests-only)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review
+```
+
+Exit code: 101 — compile failure (new review assertions not yet implemented):
+
+```
+EngineError::OwnershipMismatch — variant not found
+tx_test / tx_apply — unexpected manifest_digest argument (ownership binding not wired)
+event_cursor_encodes_as_opaque_base64url — base64url encode not implemented
+wal_recovery_with_ten_plus_records_stays_operational — lexical WAL sort false safe mode
+moved_base_refusal_is_recorded_and_survives_restart — durable rejection not persisted
+```

@@ -342,3 +342,159 @@ fn events_cursor_replay_survives_restart_without_loss_or_duplication() {
     assert_eq!(first, second);
     assert_eq!(first.len(), 1);
 }
+
+#[test]
+fn foreign_agent_cannot_advance_another_agents_transaction() {
+    let dir = scratch();
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+    let propose = engine
+        .config_propose(
+            "agent:a",
+            "sha256:aaa",
+            &propose_params("owner-bind", "/etc/nixos/configuration.nix"),
+        )
+        .expect("propose");
+
+    let err = engine
+        .tx_test(
+            "agent:b",
+            "sha256:bbb",
+            &TxTestParams {
+                tx_id: tx(&propose.tx_id),
+            },
+        )
+        .expect_err("foreign agent");
+    assert!(matches!(err, EngineError::OwnershipMismatch));
+
+    let status = engine.tx_status(&propose.tx_id).expect("status");
+    assert_eq!(status.state, TransactionState::Proposed);
+}
+
+#[test]
+fn moved_base_refusal_is_recorded_and_survives_restart() {
+    let dir = scratch();
+    let propose = {
+        let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+        let propose = engine
+            .config_propose(
+                "agent:a",
+                "sha256:abc",
+                &propose_params("moved-base", "/etc/nixos/configuration.nix"),
+            )
+            .expect("propose");
+        engine
+            .tx_test(
+                "agent:a",
+                "sha256:abc",
+                &TxTestParams {
+                    tx_id: tx(&propose.tx_id),
+                },
+            )
+            .expect("test");
+        propose
+    };
+
+    struct MovedBaseAdapter;
+    impl agentbed_broker::adapter::HostAdapter for MovedBaseAdapter {
+        fn info(&self) -> agentbed_protocol::dto::system_info::AdapterInfo {
+            UnresolvedAdapter.info()
+        }
+        fn safety_vector(&self) -> agentbed_protocol::dto::system_info::SafetyVector {
+            UnresolvedAdapter.safety_vector()
+        }
+        fn safety_source(&self) -> agentbed_protocol::dto::system_info::SafetySource {
+            UnresolvedAdapter.safety_source()
+        }
+        fn current_base_revision(&self) -> BaseRevision {
+            BaseRevision {
+                generation: Some("gen-moved".to_owned()),
+                etc_git_commit: "deadbeef".to_owned(),
+                config_digest: Digest::from_sha256_bytes([0x33; 32]),
+            }
+        }
+    }
+
+    let wal_before = wal_record_count(&dir);
+    let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("reopen");
+    let err = engine
+        .tx_apply(
+            "agent:a",
+            "sha256:abc",
+            &TxApplyParams {
+                tx_id: tx(&propose.tx_id),
+                idempotency_key: idem("moved-apply"),
+            },
+        )
+        .expect_err("moved base");
+    assert!(matches!(err, EngineError::BaseRevisionMoved));
+    assert!(wal_record_count(&dir) > wal_before);
+
+    let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("final");
+    let status = engine.tx_status(&propose.tx_id).expect("status");
+    assert_eq!(status.state, TransactionState::Rejected);
+}
+
+#[test]
+fn wal_recovery_with_ten_plus_records_stays_operational() {
+    let dir = scratch();
+    let durability = Arc::new(RealDurability);
+    let wal_dir = dir.join("wal");
+    {
+        let mut store = WalStore::open(&wal_dir, durability.clone()).expect("open");
+        for seq in 1..=12 {
+            store
+                .append_transition(&WalRecord {
+                    seq,
+                    tx_id: format!("01ARZ3NDEKTSV4RRFFQ{:07X}", seq),
+                    state: TransactionState::Proposed,
+                    idempotency_key: Some(format!("k-{seq}")),
+                    idem_fingerprint: None,
+                    agent_id: "agent:a".to_owned(),
+                    manifest_digest: Digest::from_sha256_bytes([0; 32]),
+                    base_revision: BaseRevision {
+                        generation: Some("gen-1".to_owned()),
+                        etc_git_commit: "abc".to_owned(),
+                        config_digest: Digest::from_sha256_bytes([0x11; 32]),
+                    },
+                    effect_set: vec![EffectClass::D],
+                    diff: "diff".to_owned(),
+                    affected_resources: vec!["root_config".to_owned()],
+                    approval_ref: None,
+                    result_json: None,
+                })
+                .expect("append");
+        }
+    }
+
+    let recovered = WalStore::open(&wal_dir, durability).expect("recover");
+    assert!(!recovered.recover().safe_mode);
+    let records = recovered.load_records().expect("load");
+    assert_eq!(records.len(), 12);
+    assert_eq!(records.last().map(|r| r.seq), Some(12));
+
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("engine");
+    engine
+        .config_propose(
+            "agent:a",
+            "sha256:abc",
+            &propose_params("after-12", "/etc/nixos/configuration.nix"),
+        )
+        .expect("dm after long wal");
+}
+
+#[test]
+fn event_cursor_encodes_as_opaque_base64url() {
+    let dir = scratch();
+    let log = EventLog::open(&dir).expect("open");
+    let stored = log
+        .append(EventRecord {
+            kind: "boot".to_owned(),
+            payload: "{}".to_owned(),
+        })
+        .expect("append");
+    let cursor = log.cursor_after(&stored);
+    let encoded = cursor.encode();
+    assert!(!encoded.starts_with('{'));
+    let parsed = EventCursor::parse(&encoded).expect("parse opaque cursor");
+    assert_eq!(parsed, cursor.with_log_id(log.log_id()));
+}
