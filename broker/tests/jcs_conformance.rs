@@ -156,6 +156,33 @@ fn the_v2_operation_digest_matches_its_frozen_vector() {
 }
 
 #[test]
+fn the_v2_digest_fixture_is_consumed_byte_for_byte() {
+    let fixture = std::fs::read_to_string(rpc_v2_fixture("digest-system-info-v2.txt"))
+        .expect("read digest fixture")
+        .trim()
+        .to_owned();
+    let computed =
+        OperationDigest::of(PROTOCOL_VERSION_V2, "system.info", 1, &json!({})).expect("digests");
+    assert_eq!(computed.digest().to_string(), fixture);
+}
+
+#[test]
+fn v1_and_v2_domains_never_share_a_digest() {
+    let v1 =
+        OperationDigest::of(PROTOCOL_VERSION_V1, "system.info", 1, &json!({})).expect("digests");
+    let v2 =
+        OperationDigest::of(PROTOCOL_VERSION_V2, "system.info", 1, &json!({})).expect("digests");
+    assert_ne!(v1.digest(), v2.digest());
+    assert_eq!(v1.canonical_bytes(), v2.canonical_bytes());
+}
+
+fn rpc_v2_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/fixtures/rpc-v2")
+        .join(name)
+}
+
+#[test]
 fn the_domain_separator_is_the_frozen_string() {
     assert_eq!(OPERATION_DOMAIN_V1, b"agentbed.operation.v1\0");
     assert_eq!(

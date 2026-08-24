@@ -1,0 +1,9 @@
+{
+  "idempotency_key": "propose-01",
+  "changes": [
+    {
+      "path": "/etc/nixos/configuration.nix",
+      "content": "{ config, ... }: { }"
+    }
+  ]
+}

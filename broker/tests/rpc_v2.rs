@@ -3,12 +3,30 @@
 mod support;
 
 use agentbed_broker::digest::OperationDigest;
-use agentbed_protocol::wire::{ErrorCode, OperationResult};
+use agentbed_protocol::strict;
+use agentbed_protocol::wire::{ErrorCode, OperationResult, Request};
 use agentbed_protocol::PROTOCOL_VERSION_V1;
 use agentbed_protocol::PROTOCOL_VERSION_V2;
+use std::path::PathBuf;
 use support::{read_response, send_frame, Harness, TOKEN_A};
 
 const SAMPLE_TX_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+fn rpc_v2_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/fixtures/rpc-v2")
+        .join(name)
+}
+
+#[test]
+fn the_v2_wire_fixture_parses_and_is_supported() {
+    let raw = std::fs::read(rpc_v2_fixture("request-system-info-v2.json")).expect("read fixture");
+    let value = strict::parse(&raw).expect("strict parse");
+    let request: Request = serde_json::from_value(value).expect("envelope");
+    assert_eq!(request.v, PROTOCOL_VERSION_V2);
+    assert!(request.protocol_supported());
+    assert!(request.operation_allowed());
+}
 
 fn v2_request_body(id: &str, op: &str, params: &str) -> Vec<u8> {
     format!(r#"{{"v":2,"id":"{id}","op":"{op}","auth":{{"token":"{TOKEN_A}"}},"params":{params}}}"#)

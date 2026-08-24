@@ -1,0 +1,34 @@
+# AGB-2 RED evidence (V2-AC07)
+
+Executed on baseline `0b3caf6fda511e4e2e579ec1ab5b38d5f706a53f` with only
+`broker/tests/rpc_v2.rs` added (no v2 implementation). Command:
+
+```bash
+git worktree add /tmp/agb2-red 0b3caf6fda511e4e2e579ec1ab5b38d5f706a53f
+cp broker/tests/rpc_v2.rs /tmp/agb2-red/broker/tests/
+cd /tmp/agb2-red && cargo test -p agentbed-broker --test rpc_v2
+```
+
+Exit code: 101 (compile failure — tests cannot run without v2 implementation)
+
+```
+error[E0432]: unresolved import `agentbed_protocol::PROTOCOL_VERSION_V2`
+ --> broker/tests/rpc_v2.rs:8:5
+
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+  --> broker/tests/rpc_v2.rs:44:21
+   |
+44 |     let v2_digest = OperationDigest::of(
+   |                     ^^^^^^^^^^^^^^^^^^^
+45 |         PROTOCOL_VERSION_V2,
+   |         ------------------- unexpected argument #1
+
+error: could not compile `agentbed-broker` (test "rpc_v2") due to 4 previous errors
+```
+
+GREEN (same tests on PR head `b6abf11`+):
+
+```bash
+cargo test -p agentbed-broker --test rpc_v2
+# 9 passed; 0 failed
+```
