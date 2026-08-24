@@ -89,3 +89,30 @@ cargo clippy --workspace --all-targets -- -D warnings    # PASS
 cargo build --workspace --all-targets                    # PASS
 cargo test --workspace                                   # PASS
 ```
+
+## Repair RED round 3 (native review #5010933840 @ `db27b7a`, tests-only)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review
+```
+
+Exit code: 101 — 5 assertions failed @ `db27b7a` (executed before production edits):
+
+```
+transaction_ids_are_not_static_process_counter_values — fixed counter prefix tx_id
+duplicate_tx_id_in_wal_enters_safe_mode — D/M accepted with duplicate WAL tx_id
+stale_event_cursor_is_rejected_after_log_recreation — log_id not UUID / stale cursor accepted
+cursor_without_log_id_is_rejected_on_replay — empty log_id cursor replays
+moved_base_apply_replay_returns_original_refusal_after_restart — InvalidTransition on idempotent retry
+```
+
+## Repair GREEN round 3 (implementation commit `482f8da`)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review   # 19 passed
+cargo test -p agentbed-gw --test events_resource         # 1 passed
+cargo fmt --all -- --check                               # PASS
+cargo clippy --workspace --all-targets -- -D warnings    # PASS
+cargo build --workspace --all-targets                    # PASS
+cargo test --workspace                                   # PASS
+```
