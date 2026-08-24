@@ -685,3 +685,373 @@ fn moved_base_apply_replay_returns_original_refusal_after_restart() {
     let status = engine.tx_status(&tx_id).expect("status");
     assert_eq!(status.state, TransactionState::Rejected);
 }
+
+fn wal_record(
+    seq: u64,
+    tx_id: &str,
+    state: TransactionState,
+    agent_id: &str,
+    manifest_byte: u8,
+) -> WalRecord {
+    WalRecord {
+        seq,
+        tx_id: tx_id.to_owned(),
+        state,
+        idempotency_key: Some(format!("k-{seq}")),
+        idem_fingerprint: None,
+        agent_id: agent_id.to_owned(),
+        manifest_digest: Digest::from_sha256_bytes([manifest_byte; 32]),
+        base_revision: BaseRevision {
+            generation: Some("gen-1".to_owned()),
+            etc_git_commit: "abc".to_owned(),
+            config_digest: Digest::from_sha256_bytes([0x11; 32]),
+        },
+        effect_set: vec![EffectClass::D],
+        diff: "diff".to_owned(),
+        affected_resources: vec!["root_config".to_owned()],
+        approval_ref: None,
+        result_json: None,
+    }
+}
+
+fn wal_record_with_base_revision(
+    seq: u64,
+    tx_id: &str,
+    state: TransactionState,
+    agent_id: &str,
+    manifest_byte: u8,
+    base_revision: BaseRevision,
+) -> WalRecord {
+    let mut record = wal_record(seq, tx_id, state, agent_id, manifest_byte);
+    record.base_revision = base_revision;
+    record
+}
+
+fn wal_record_to_json(record: &WalRecord) -> serde_json::Value {
+    let value = serde_json::to_value(record).expect("serialize wal record");
+    assert!(serde_json::from_value::<WalRecord>(value.clone()).is_ok());
+    value
+}
+
+fn append_wal_records(dir: &Path, records: &[WalRecord]) {
+    let durability = Arc::new(RealDurability);
+    let mut store = WalStore::open(dir.join("wal"), durability).expect("wal");
+    for record in records {
+        store.append_transition(record).expect("append");
+    }
+}
+
+fn write_wal_json_record(dir: &Path, seq: u64, value: serde_json::Value) {
+    let wal_dir = dir.join("wal");
+    std::fs::create_dir_all(wal_dir.join("records")).expect("records");
+    std::fs::write(
+        wal_dir.join("records").join(format!("{seq}.json")),
+        serde_json::to_string(&value).expect("json"),
+    )
+    .expect("write record");
+    std::fs::write(
+        wal_dir.join("checkpoint.json"),
+        format!(r#"{{"seq":{seq}}}"#),
+    )
+    .expect("write checkpoint");
+}
+
+fn write_mutated_wal_record(
+    dir: &Path,
+    seq: u64,
+    record: WalRecord,
+    mutate: impl FnOnce(&mut serde_json::Value),
+) {
+    let mut value = wal_record_to_json(&record);
+    mutate(&mut value);
+    write_wal_json_record(dir, seq, value);
+}
+
+fn assert_dm_refused_in_safe_mode(dir: &Path) {
+    let engine = TransactionEngine::open(dir, UnresolvedAdapter).expect("open");
+    let err = engine
+        .config_propose(
+            "agent:a",
+            "sha256:abc",
+            &propose_params("after-invalid-wal", "/etc/nixos/configuration.nix"),
+        )
+        .expect_err("safe mode");
+    assert!(matches!(err, EngineError::SafeMode));
+}
+
+fn set_path_readonly(path: &Path, readonly: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = if readonly { 0o555 } else { 0o755 };
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+}
+
+fn idempotency_binding_path(dir: &Path, agent_id: &str, op: &str, key: &str) -> PathBuf {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let binding = format!("{agent_id}:{op}:{key}");
+    let mut hasher = DefaultHasher::new();
+    binding.hash(&mut hasher);
+    dir.join("idempotency")
+        .join(format!("{:016x}.json", hasher.finish()))
+}
+
+// --- Review #5011209070: WAL semantic validation (RED) ---
+
+#[test]
+fn watchdog_committed_record_in_wal_enters_safe_mode() {
+    let dir = scratch();
+    let tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    append_wal_records(
+        &dir,
+        &[
+            wal_record(1, tx, TransactionState::Proposed, "agent:a", 0),
+            wal_record(2, tx, TransactionState::Committed, "agent:a", 0),
+        ],
+    );
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn watchdog_committing_record_in_wal_enters_safe_mode() {
+    let dir = scratch();
+    let tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    append_wal_records(
+        &dir,
+        &[
+            wal_record(1, tx, TransactionState::Proposed, "agent:a", 0),
+            wal_record(2, tx, TransactionState::Committing, "agent:a", 0),
+        ],
+    );
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn impossible_testing_to_proposed_chain_enters_safe_mode() {
+    let dir = scratch();
+    let tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    append_wal_records(
+        &dir,
+        &[
+            wal_record(1, tx, TransactionState::Proposed, "agent:a", 0),
+            wal_record(2, tx, TransactionState::Testing, "agent:a", 0),
+            wal_record(3, tx, TransactionState::Proposed, "agent:a", 0),
+        ],
+    );
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn immutable_agent_identity_change_in_wal_enters_safe_mode() {
+    let dir = scratch();
+    let tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    append_wal_records(
+        &dir,
+        &[
+            wal_record(1, tx, TransactionState::Proposed, "agent:a", 0),
+            wal_record(2, tx, TransactionState::Testing, "agent:b", 0),
+        ],
+    );
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn immutable_manifest_digest_change_in_wal_enters_safe_mode() {
+    let dir = scratch();
+    let tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    append_wal_records(
+        &dir,
+        &[
+            wal_record(1, tx, TransactionState::Proposed, "agent:a", 0),
+            wal_record(2, tx, TransactionState::Testing, "agent:a", 1),
+        ],
+    );
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn immutable_base_revision_change_in_wal_enters_safe_mode() {
+    let dir = scratch();
+    let tx = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let moved_base = BaseRevision {
+        generation: Some("gen-moved".to_owned()),
+        etc_git_commit: "deadbeef".to_owned(),
+        config_digest: Digest::from_sha256_bytes([0x99; 32]),
+    };
+    append_wal_records(
+        &dir,
+        &[
+            wal_record(1, tx, TransactionState::Proposed, "agent:a", 0),
+            wal_record_with_base_revision(
+                2,
+                tx,
+                TransactionState::Testing,
+                "agent:a",
+                0,
+                moved_base,
+            ),
+        ],
+    );
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn unsupported_wal_record_version_enters_safe_mode() {
+    let dir = scratch();
+    let record = wal_record(
+        1,
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        TransactionState::Proposed,
+        "agent:a",
+        0,
+    );
+    write_mutated_wal_record(&dir, 1, record, |value| {
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("record_version".to_owned(), serde_json::json!(2));
+    });
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn wal_record_missing_required_field_enters_safe_mode() {
+    let dir = scratch();
+    let record = wal_record(
+        1,
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        TransactionState::Proposed,
+        "agent:a",
+        0,
+    );
+    write_mutated_wal_record(&dir, 1, record, |value| {
+        value
+            .as_object_mut()
+            .expect("object")
+            .remove("agent_id");
+    });
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+#[test]
+fn wal_record_invalid_required_field_enters_safe_mode() {
+    let dir = scratch();
+    let record = wal_record(
+        1,
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        TransactionState::Proposed,
+        "agent:a",
+        0,
+    );
+    write_mutated_wal_record(&dir, 1, record, |value| {
+        value["state"] = serde_json::json!("not_a_real_state");
+    });
+    assert_dm_refused_in_safe_mode(&dir);
+}
+
+// --- Review #5011209070: idempotency durability ordering (RED) ---
+
+#[test]
+fn idempotency_index_write_failure_immediate_retry_does_not_duplicate() {
+    let dir = scratch();
+    let params = propose_params("idem-write-fail", "/etc/nixos/configuration.nix");
+    let idem_dir = dir.join("idempotency");
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+    set_path_readonly(&idem_dir, true);
+    let err = engine
+        .config_propose("agent:a", "sha256:abc", &params)
+        .expect_err("idem write failure");
+    assert!(matches!(err, EngineError::Storage(_)));
+    set_path_readonly(&idem_dir, false);
+
+    assert_eq!(wal_record_count(&dir), 1);
+    assert_eq!(event_count(&dir), 1);
+
+    let durability = Arc::new(RealDurability);
+    let store = WalStore::open(dir.join("wal"), durability).expect("wal");
+    let original_tx = store.load_records().expect("load")[0].tx_id.clone();
+    let replay = engine
+        .config_propose("agent:a", "sha256:abc", &params)
+        .expect("same-key replay");
+    assert_eq!(replay.tx_id, original_tx);
+    assert_eq!(wal_record_count(&dir), 1);
+    assert_eq!(event_count(&dir), 1);
+}
+
+#[test]
+fn idempotency_index_write_failure_restart_replays_authoritatively() {
+    let dir = scratch();
+    let params = propose_params("idem-write-restart", "/etc/nixos/configuration.nix");
+    let idem_dir = dir.join("idempotency");
+    let failed_tx = {
+        let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+        set_path_readonly(&idem_dir, true);
+        let _ = engine
+            .config_propose("agent:a", "sha256:abc", &params)
+            .expect_err("idem write failure");
+        set_path_readonly(&idem_dir, false);
+        let durability = Arc::new(RealDurability);
+        let store = WalStore::open(dir.join("wal"), durability).expect("wal");
+        store.load_records().expect("load")[0].tx_id.clone()
+    };
+
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("reopen");
+    let replay = engine
+        .config_propose("agent:a", "sha256:abc", &params)
+        .expect("restart replay");
+    assert_eq!(replay.tx_id, failed_tx);
+    assert_eq!(wal_record_count(&dir), 1);
+}
+
+#[test]
+fn idempotency_index_rename_failure_immediate_retry_does_not_duplicate() {
+    let dir = scratch();
+    let key = "idem-rename-immediate";
+    let params = propose_params(key, "/etc/nixos/configuration.nix");
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+    let blocker = idempotency_binding_path(&dir, "agent:a", "config.propose", key);
+    std::fs::create_dir_all(&blocker).expect("rename blocker");
+
+    let err = engine
+        .config_propose("agent:a", "sha256:abc", &params)
+        .expect_err("rename failure");
+    assert!(matches!(err, EngineError::Storage(_)));
+    assert_eq!(wal_record_count(&dir), 1);
+    assert_eq!(event_count(&dir), 1);
+
+    std::fs::remove_dir_all(&blocker).expect("clear blocker");
+    let durability = Arc::new(RealDurability);
+    let store = WalStore::open(dir.join("wal"), durability).expect("wal");
+    let original_tx = store.load_records().expect("load")[0].tx_id.clone();
+    let replay = engine
+        .config_propose("agent:a", "sha256:abc", &params)
+        .expect("same-key replay");
+    assert_eq!(replay.tx_id, original_tx);
+    assert_eq!(wal_record_count(&dir), 1);
+    assert_eq!(event_count(&dir), 1);
+}
+
+#[test]
+fn idempotency_index_rename_failure_restart_replays_authoritatively() {
+    let dir = scratch();
+    let key = "idem-rename-restart";
+    let params = propose_params(key, "/etc/nixos/configuration.nix");
+    let failed_tx = {
+        let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+        let blocker = idempotency_binding_path(&dir, "agent:a", "config.propose", key);
+        std::fs::create_dir_all(&blocker).expect("rename blocker");
+        let _ = engine
+            .config_propose("agent:a", "sha256:abc", &params)
+            .expect_err("rename failure");
+        std::fs::remove_dir_all(&blocker).expect("clear blocker");
+        let durability = Arc::new(RealDurability);
+        let store = WalStore::open(dir.join("wal"), durability).expect("wal");
+        store.load_records().expect("load")[0].tx_id.clone()
+    };
+
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("reopen");
+    let replay = engine
+        .config_propose("agent:a", "sha256:abc", &params)
+        .expect("restart replay");
+    assert_eq!(replay.tx_id, failed_tx);
+    assert_eq!(wal_record_count(&dir), 1);
+}
