@@ -62,6 +62,15 @@ impl EventCursor {
         }
     }
 
+    #[must_use]
+    pub fn encode(&self) -> String {
+        let body = CursorBody {
+            log_id: self.log_id.clone(),
+            seq: self.seq,
+        };
+        serde_json::to_string(&body).unwrap_or_default()
+    }
+
     pub fn parse(encoded: &str) -> Result<Self, EventError> {
         let body: CursorBody =
             serde_json::from_str(encoded).map_err(|_| EventError::MalformedCursor)?;
@@ -119,6 +128,23 @@ impl EventLog {
             durability: Arc::new(RealDurability),
             meta: Mutex::new(meta),
         })
+    }
+
+    /// Validate log tail integrity against persisted metadata.
+    pub fn validate_integrity(&self) -> Result<(), EventError> {
+        let events = self.read_all()?;
+        let meta = self.meta.lock().expect("meta lock");
+        let expected_next = events.last().map_or(1, |event| event.seq.saturating_add(1));
+        if meta.next_seq != expected_next {
+            return Err(EventError::MalformedCursor);
+        }
+        for (idx, event) in events.iter().enumerate() {
+            let expected = u64::try_from(idx).unwrap_or(u64::MAX).saturating_add(1);
+            if event.seq != expected {
+                return Err(EventError::MalformedCursor);
+            }
+        }
+        Ok(())
     }
 
     #[must_use]

@@ -52,11 +52,7 @@ fn wal_record_count(state_dir: &Path) -> usize {
     std::fs::read_dir(records_dir)
         .expect("records dir")
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "json")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
         .count()
 }
 
@@ -206,6 +202,7 @@ fn checkpoint_seq_mismatch_enters_safe_mode_and_refuses_dm() {
                 tx_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
                 state: TransactionState::Proposed,
                 idempotency_key: Some("k".to_owned()),
+                idem_fingerprint: None,
                 agent_id: "agent:a".to_owned(),
                 manifest_digest: Digest::from_sha256_bytes([0; 32]),
                 base_revision: BaseRevision {

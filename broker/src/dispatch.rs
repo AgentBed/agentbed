@@ -34,15 +34,15 @@ use crate::observability::{CallObservation, ObservationSink};
 use crate::peercred::PeerCredentials;
 use crate::policy::{evaluate, CallAdmission, CallDescriptor, Decision};
 use crate::quota::QuotaLedger;
-use crate::tools::{config_propose, system_info, transaction};
+use crate::tools::{config_propose, events, system_info, transaction};
 use crate::transaction::engine::{EngineError, TransactionEngine};
 use agentbed_protocol::digest::Digest;
 use agentbed_protocol::dto::transaction::ConfigProposeResult;
 use agentbed_protocol::strict;
 use agentbed_protocol::wire::{
-    CallBinding, ConfigProposeParams, DecisionStage, EffectClass, ErrorCode, OpName,
-    OperationResult, Request, RequestId, Response, ResponseError, SystemInfoParams, TxApplyParams,
-    TxRollbackParams, TxStatusParams, TxTestParams,
+    CallBinding, ConfigProposeParams, DecisionStage, EffectClass, ErrorCode, EventsReplayParams,
+    OpName, OperationResult, Request, RequestId, Response, ResponseError, SystemInfoParams,
+    TxApplyParams, TxRollbackParams, TxStatusParams, TxTestParams,
 };
 use agentbed_protocol::PROTOCOL_VERSION_V1;
 use agentbed_schemas::{validate, SchemaKind};
@@ -224,6 +224,18 @@ impl Dispatcher {
                 }
                 self.tx_status(&request, &agent, peer, observer, protocol)
             }
+            OpName::EventsReplay => {
+                if request.op_version != events::VERSION {
+                    return Self::unsupported_operation_version(
+                        &request,
+                        &agent,
+                        peer,
+                        observer,
+                        events::OP,
+                    );
+                }
+                self.events_replay(&request, &agent, peer, observer, protocol)
+            }
         }
     }
 
@@ -263,6 +275,34 @@ impl Dispatcher {
                         base_revision: outcome.base_revision,
                     },
                 )))
+            },
+        )
+    }
+
+    fn events_replay(
+        &self,
+        request: &Request,
+        agent: &AgentContext,
+        peer: PeerCredentials,
+        observer: &dyn ObservationSink,
+        protocol: u8,
+    ) -> Response {
+        self.execute_v2(
+            request,
+            agent,
+            peer,
+            observer,
+            protocol,
+            &events::describe_call(),
+            events::OP,
+            SchemaKind::EventsReplayRequest,
+            |params| {
+                serde_json::from_value::<EventsReplayParams>(params.clone())
+                    .map_err(|_| "params_rejected")
+            },
+            |_manifest_digest, params| {
+                let replay = self.transactions.events_replay(params.cursor.as_deref())?;
+                Ok(OperationResult::EventsReplay(Box::new(replay)))
             },
         )
     }

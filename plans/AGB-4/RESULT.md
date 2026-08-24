@@ -45,6 +45,18 @@ cargo test --workspace                                PASS
 ## Residual gaps (explicit)
 
 - `tx.rollback` still returns `internal` (deferred).
-- Idempotency index is in-memory only (not persisted across restart).
 - Watchdog decision states and real Nix effects deferred to L03+ / later lanes.
 - Gate 1 remains open (L01 is one lane, not full gate closure).
+
+## Repair (review #5010391942 @ `daaaae0`)
+
+| Finding | Fix |
+|---|---|
+| Idempotency in-memory only | Durable `IdempotencyStore` under `{state_dir}/idempotency/` + WAL `idem_fingerprint` rebuild |
+| `tx.apply` ignores idempotency key | Engine honors key on apply; conflicting reuse fails closed after restart |
+| WAL/event corruption not entering safe mode | `WalRecovery`, orphan-tmp detection, checkpoint consistency, `EventLog::validate_integrity` |
+| D/M not serialized | Single `dm_lock` for config propose / tx apply paths |
+| Event append errors discarded | Fail-closed: rollback last WAL transition + safe mode on append failure |
+| No `agentbed://events` MCP resource | Broker `events.replay` (R-class) + gateway `resources/list` / `resources/read` |
+
+Repair tests: `broker/tests/l01_repair_review.rs` (9), `gw/tests/events_resource.rs` (1). See `plans/AGB-4/red-evidence.txt` for RED→GREEN trace.

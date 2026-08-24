@@ -61,10 +61,7 @@ fn mcp_resources_list_includes_agentbed_events() {
         config.state_dir.clone().expect("state_dir"),
     ));
     let mut server = Server::start(&config, dispatcher, Arc::new(StderrObserver)).expect("server");
-    let mut session = Session::new(
-        BrokerClient::new(&config.socket_path),
-        Token::new(TOKEN),
-    );
+    let mut session = Session::new(BrokerClient::new(&config.socket_path), Token::new(TOKEN));
 
     let line = json!({
         "jsonrpc": "2.0",

@@ -67,6 +67,10 @@ pub enum SchemaKind {
     TxStepResponse,
     /// `tx.status` result.
     TxStatusResponse,
+    /// `events.replay` request parameters.
+    EventsReplayRequest,
+    /// `events.replay` result.
+    EventsReplayResponse,
 }
 
 impl SchemaKind {
@@ -91,6 +95,8 @@ impl SchemaKind {
             SchemaKind::TxStatusRequest,
             SchemaKind::TxStepResponse,
             SchemaKind::TxStatusResponse,
+            SchemaKind::EventsReplayRequest,
+            SchemaKind::EventsReplayResponse,
         ]
     }
 
@@ -125,6 +131,12 @@ impl SchemaKind {
             SchemaKind::TxStatusResponse => {
                 include_str!("../tool/tx.status.response.schema.json")
             }
+            SchemaKind::EventsReplayRequest => {
+                include_str!("../tool/events.replay.request.schema.json")
+            }
+            SchemaKind::EventsReplayResponse => {
+                include_str!("../tool/events.replay.response.schema.json")
+            }
         }
     }
 
@@ -157,6 +169,8 @@ impl SchemaKind {
             TxStatusRequest,
             TxStepResponse,
             TxStatusResponse,
+            EventsReplayRequest,
+            EventsReplayResponse,
         )
     }
 }

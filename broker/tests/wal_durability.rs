@@ -29,6 +29,7 @@ fn sample_record(seq: u64, state: TransactionState) -> WalRecord {
         tx_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
         state,
         idempotency_key: Some("idem-1".to_owned()),
+        idem_fingerprint: None,
         agent_id: "agent:test".to_owned(),
         manifest_digest: Digest::from_sha256_bytes([0; 32]),
         base_revision: BaseRevision {

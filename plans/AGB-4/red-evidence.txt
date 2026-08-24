@@ -51,3 +51,14 @@ concurrent_same_idempotency_key_serializes_to_one_transaction — duplicate tx_i
 event_append_failure_enters_safe_mode_without_exposing_transition — transition committed despite append failure
 mcp_resources_list_includes_agentbed_events — unknown method: resources/list
 ```
+
+## Repair GREEN (implementation commit on branch `agent/agb-4/l01-durable-transaction-core`)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review   # 9 passed
+cargo test -p agentbed-gw --test events_resource         # 1 passed
+cargo fmt --all -- --check                               # PASS
+cargo clippy --workspace --all-targets -- -D warnings    # PASS
+cargo build --workspace --all-targets                    # PASS
+cargo test --workspace                                   # PASS
+```
