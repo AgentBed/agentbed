@@ -1,0 +1,25 @@
+# AGB-4 RED evidence (L01-AC08)
+
+Executed on plan commit `76f4f22a3b576c432eda7b4358b842242d6c35e4` with
+tests-only additions (no production implementation). Command:
+
+```bash
+cargo test -p agentbed-broker --test transaction_state
+```
+
+Exit code: 101 (compile failure — tests cannot run without L01 modules)
+
+```
+error[E0433]: cannot find `transaction` in `agentbed_broker`
+ --> broker/tests/transaction_state.rs:3:22
+  |
+3 | use agentbed_broker::transaction::state::{
+  |                      ^^^^^^^^^^^ could not find `transaction` in `agentbed_broker`
+
+error: could not compile `agentbed-broker` (test "transaction_state") due to 1 previous error
+```
+
+Additional test binaries added (same compile failure class until implementation):
+`wal_durability`, `transaction_engine`, `events_log`, `tx_status_rpc`, `performance_reads`.
+
+GREEN target: all six L01 test binaries pass; full workspace suite PASS.
