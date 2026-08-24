@@ -50,6 +50,15 @@ pub mod frame;
 pub mod strict;
 pub mod wire;
 
-/// Wire protocol version. A frame whose `v` is not this is refused; there is
-/// no negotiation and no compatibility shim at Gate 0.
-pub const PROTOCOL_VERSION: u8 = 1;
+/// Wire protocol version 1 — frozen at Gate 0 (`docs/protocol.md` §2).
+pub const PROTOCOL_VERSION_V1: u8 = 1;
+
+/// Wire protocol version 2 — Gate 1 contract (`docs/protocol.md` §7).
+pub const PROTOCOL_VERSION_V2: u8 = 2;
+
+/// The only protocol version understood at Gate 0. Kept as an alias so v1
+/// call sites stay readable.
+pub const PROTOCOL_VERSION: u8 = PROTOCOL_VERSION_V1;
+
+/// Every protocol version this crate recognizes on the wire.
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[u8] = &[PROTOCOL_VERSION_V1, PROTOCOL_VERSION_V2];

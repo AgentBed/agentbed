@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/tool/tx.rollback.request.schema.json",
+  "title": "tx.rollback request parameters",
+  "description": "ADR-001 §5.2: revert is a new forward transaction, never a state restore; carries its own idempotency key.",
+  "type": "object",
+  "required": ["tx_id", "idempotency_key"],
+  "additionalProperties": false,
+  "properties": {
+    "tx_id": {
+      "type": "string",
+      "minLength": 26,
+      "maxLength": 26,
+      "pattern": "^[0-7][0-9A-Z]{25}$"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[!-~]+$"
+    }
+  }
+}

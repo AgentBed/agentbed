@@ -39,7 +39,10 @@ fn an_authorized_call_returns_the_report_and_its_binding() {
     assert!(binding.operation_digest.to_string().starts_with("sha256:"));
     assert!(binding.manifest_digest.to_string().starts_with("sha256:"));
 
-    let OperationResult::SystemInfo(info) = response.result.expect("a result");
+    let info = match response.result.expect("a result") {
+        OperationResult::SystemInfo(info) => info,
+        other => panic!("expected system.info, got {other:?}"),
+    };
     assert!(!info.host.hostname.is_empty());
     assert!(!info.host.kernel_release.is_empty());
 }
@@ -53,7 +56,10 @@ fn the_result_conforms_to_its_published_schema() {
     let mut stream = harness.connect();
     send_frame(&mut stream, &request_body("01J-schema", TOKEN_A));
     let response = read_response(&mut stream).expect("a response");
-    let OperationResult::SystemInfo(info) = response.result.expect("a result");
+    let info = match response.result.expect("a result") {
+        OperationResult::SystemInfo(info) => info,
+        other => panic!("expected system.info, got {other:?}"),
+    };
 
     let value = serde_json::to_value(&*info).expect("serializes");
     validate(SchemaKind::SystemInfoResponse, &value).expect("result matches its schema");
@@ -68,7 +74,10 @@ fn the_gate0_safety_vector_is_honest_about_having_resolved_nothing() {
     let mut stream = harness.connect();
     send_frame(&mut stream, &request_body("01J-safety", TOKEN_A));
     let response = read_response(&mut stream).expect("a response");
-    let OperationResult::SystemInfo(info) = response.result.expect("a result");
+    let info = match response.result.expect("a result") {
+        OperationResult::SystemInfo(info) => info,
+        other => panic!("expected system.info, got {other:?}"),
+    };
 
     assert_eq!(info.safety_source, SafetySource::UnresolvedAdapter);
     assert!(!info.adapter.resolved);

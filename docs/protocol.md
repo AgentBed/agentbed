@@ -99,3 +99,60 @@ Frozen elements, each for a reason:
 | MCP translation, transport | `gw/` | — |
 
 `proto/` reaches no conclusions: both processes execute it independently and neither trusts the other's result. Security semantics — what is hashed, what is authorized — live with the authority that enforces them.
+
+## 7. Broker RPC v2 — Gate 1 contract
+
+**Status:** Revision 1 · 2026-08-24 · normative for `proto/`, `broker/` and `gw/` from Gate 1 L00 onward. Protocol version 1 (§§1–6 above) remains frozen byte-for-byte. Version 2 adds the Gate 1 operation surface without revising v1.
+
+### 7.1 Version dispatch
+
+- `v` — protocol version. Only `1` and `2` are recognized. Absent, unknown, or any other value → `invalid_request`. There is **no negotiation**, implicit translation, downgrade, or fallback.
+- Each component (gateway and broker) selects and dispatches an explicit version independently. A v1 frame is never reinterpreted as v2, and vice versa.
+- Responses **must** echo the request's `v`. A response bound to a request is always at the same protocol version.
+
+| `v` | Operation set |
+|---|---|
+| `1` | `system.info` only — unchanged from §2 |
+| `2` | `system.info`, `config.propose`, `tx.test`, `tx.apply`, `tx.rollback`, `tx.status` |
+
+Within v2, `op_version` defaults to `1` and follows the same refusal rules as §2: unsupported operation versions return `unsupported_operation`, never silent reinterpretation.
+
+### 7.2 Operation digest — v2 domain
+
+```
+digest = SHA-256( "agentbed.operation.v2\0" || JCS(canonical_input) )
+```
+
+`canonical_input` remains `{operation, operation_version, arguments}` with the same construction order as §4. Identical operation and arguments under v1 and v2 **must never** share a digest or approval/replay binding — the domain separator is the sole intentional difference for the same canonical input.
+
+Golden vector for `system.info` v2 / op_version 1 / `{}`:
+
+```
+sha256:70e36ed0a67a26c7ac9aac06d48be620cdfb7f964065afea1633b9c9056afc26
+```
+
+Exact hex is pinned in `broker/tests/jcs_conformance.rs` and `tests/fixtures/rpc-v2/digest-system-info-v2.txt`.
+
+### 7.3 Gate 1 operations (v2, op_version 1)
+
+Effect sets are minima from ADR-001 §5.1; arguments can only raise them (`docs/effects.md` §1).
+
+| Operation | Min. effect set | Request `params` | Result `result` |
+|---|---|---|---|
+| `system.info` | `{R}` | `{}` — same schema as v1 | same response schema as v1 |
+| `config.propose` | `{D}` | `{idempotency_key, changes:[{path, content}]}` — absolute paths, ≥1 change | `{tx_id, diff, test_plan, affected_resources, base_revision}` |
+| `tx.test` | `{D}` | `{tx_id}` | `{tx_id, state}` |
+| `tx.apply` | `{D}` | `{tx_id, idempotency_key}` | `{tx_id, state}` |
+| `tx.rollback` | `{D}` | `{tx_id, idempotency_key}` — revert is a new forward transaction (ADR-001 §5.2) | `{tx_id, state}` |
+| `tx.status` | `{R}` | `{tx_id}` | `{tx_id, state, effect_set, base_revision?}` |
+
+`tx_id` is a ULID (26 Crockford base32 characters). `idempotency_key` is graphic ASCII, 1..128 bytes. `base_revision` captures `{generation?, etc_git_commit, config_digest}` as persisted in effects.md §3. JSON Schemas live under `schemas/tool/`.
+
+Semantic checks — manifest path allowlists, class-F diff rejection, WAL presence, watchdog arming — are broker-side and land in later Gate 1 lanes. L00 validates wire shape, computes digests, and refuses execution of mutating operations with `internal` until the engine exists.
+
+### 7.4 Migration policy
+
+- **Dual-version coexistence:** v1 and v2 frames may be sent to the same broker socket during migration. Dispatch is by explicit `v`; no auto-upgrade.
+- **Gateway responsibility:** the gateway chooses which protocol version to emit per tool call. Gate 0 gateways may remain v1-only for `system.info`; Gate 1 tools require v2.
+- **Additive changes:** new operations or optional result fields within v2 require a new `op_version` or a new protocol version — never silent extension under an existing version.
+- **Breaking changes:** new protocol version (`v: 3`), never an in-place edit to v1 or v2 guarantees.

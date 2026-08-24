@@ -17,9 +17,13 @@
     clippy::indexing_slicing
 )]
 
-use agentbed_broker::digest::{manifest_digest, OperationDigest, OPERATION_DOMAIN};
+use agentbed_broker::digest::{
+    manifest_digest, operation_domain, OperationDigest, OPERATION_DOMAIN_V1,
+};
 use agentbed_broker::jcs::{canonicalize, ecma_number_to_string};
 use agentbed_protocol::strict;
+use agentbed_protocol::PROTOCOL_VERSION_V1;
+use agentbed_protocol::PROTOCOL_VERSION_V2;
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -129,7 +133,8 @@ fn the_operation_digest_matches_its_frozen_vector() {
     //     b"agentbed.operation.v1\0"
     //     b"{\"arguments\":{},\"operation\":\"system.info\",\"operation_version\":1}"
     //   ).hexdigest())'
-    let computed = OperationDigest::of("system.info", 1, &json!({})).expect("digests");
+    let computed =
+        OperationDigest::of(PROTOCOL_VERSION_V1, "system.info", 1, &json!({})).expect("digests");
     assert_eq!(
         computed.canonical_bytes(),
         br#"{"arguments":{},"operation":"system.info","operation_version":1}"#
@@ -141,10 +146,24 @@ fn the_operation_digest_matches_its_frozen_vector() {
 }
 
 #[test]
-fn the_domain_separator_is_the_frozen_string() {
-    assert_eq!(OPERATION_DOMAIN, b"agentbed.operation.v1\0");
+fn the_v2_operation_digest_matches_its_frozen_vector() {
+    let computed =
+        OperationDigest::of(PROTOCOL_VERSION_V2, "system.info", 1, &json!({})).expect("digests");
     assert_eq!(
-        OPERATION_DOMAIN.last(),
+        computed.digest().to_string(),
+        "sha256:70e36ed0a67a26c7ac9aac06d48be620cdfb7f964065afea1633b9c9056afc26"
+    );
+}
+
+#[test]
+fn the_domain_separator_is_the_frozen_string() {
+    assert_eq!(OPERATION_DOMAIN_V1, b"agentbed.operation.v1\0");
+    assert_eq!(
+        operation_domain(PROTOCOL_VERSION_V1).expect("v1 domain"),
+        OPERATION_DOMAIN_V1
+    );
+    assert_eq!(
+        OPERATION_DOMAIN_V1.last(),
         Some(&0u8),
         "the separator must end in NUL so no separator is a prefix of another"
     );
@@ -156,7 +175,8 @@ fn operations_and_manifests_live_in_different_domains() {
     let document = json!({
         "arguments": {}, "operation": "system.info", "operation_version": 1
     });
-    let as_operation = OperationDigest::of("system.info", 1, &json!({})).expect("digests");
+    let as_operation =
+        OperationDigest::of(PROTOCOL_VERSION_V1, "system.info", 1, &json!({})).expect("digests");
     let as_manifest = manifest_digest(&document).expect("digests");
     assert_ne!(as_operation.digest(), &as_manifest);
 }

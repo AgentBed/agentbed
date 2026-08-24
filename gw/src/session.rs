@@ -116,6 +116,9 @@ impl Session {
                             },
                             CallOutcome::Result,
                         ),
+                    Some(_) => CallOutcome::Refused(
+                        "broker returned an operation this gateway does not expose".to_owned(),
+                    ),
                     None => CallOutcome::Refused(
                         "broker returned neither a result nor an error".to_owned(),
                     ),

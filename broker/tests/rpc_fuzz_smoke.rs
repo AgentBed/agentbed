@@ -158,7 +158,7 @@ fn malformed_bodies_are_refused(harness: &Harness) {
         br#"{"v":1,"id":"01J","op":"system.info","op_version":0,"auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
         // Operation version wrongly typed.
         br#"{"v":1,"id":"01J","op":"system.info","op_version":"1","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
-        br#"{"v":2,"id":"01J","op":"system.info","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
+        br#"{"v":2,"id":"01J","op":"tx.status","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
         br#"{"v":1,"id":"01J","op":"system.reboot","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{}}"#.to_vec(),
         br#"{"v":1,"id":"01J","op":"system.info","auth":{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"params":{},"extra":1}"#.to_vec(),
         // Duplicate keys: two readings of one document, so no reading at all.
