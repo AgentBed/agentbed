@@ -1,0 +1,10 @@
+{
+  "tx_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "state": "PROPOSED",
+  "effect_set": ["D"],
+  "base_revision": {
+    "generation": null,
+    "etc_git_commit": "abc123",
+    "config_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

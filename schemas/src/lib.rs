@@ -51,6 +51,22 @@ pub enum SchemaKind {
     SystemInfoRequest,
     /// `system.info` result.
     SystemInfoResponse,
+    /// `config.propose` request parameters.
+    ConfigProposeRequest,
+    /// `config.propose` result.
+    ConfigProposeResponse,
+    /// `tx.test` request parameters.
+    TxTestRequest,
+    /// `tx.apply` request parameters.
+    TxApplyRequest,
+    /// `tx.rollback` request parameters.
+    TxRollbackRequest,
+    /// `tx.status` request parameters.
+    TxStatusRequest,
+    /// `tx.test` / `tx.apply` / `tx.rollback` result.
+    TxStepResponse,
+    /// `tx.status` result.
+    TxStatusResponse,
 }
 
 impl SchemaKind {
@@ -67,6 +83,14 @@ impl SchemaKind {
             SchemaKind::SafetyVector,
             SchemaKind::SystemInfoRequest,
             SchemaKind::SystemInfoResponse,
+            SchemaKind::ConfigProposeRequest,
+            SchemaKind::ConfigProposeResponse,
+            SchemaKind::TxTestRequest,
+            SchemaKind::TxApplyRequest,
+            SchemaKind::TxRollbackRequest,
+            SchemaKind::TxStatusRequest,
+            SchemaKind::TxStepResponse,
+            SchemaKind::TxStatusResponse,
         ]
     }
 
@@ -84,6 +108,22 @@ impl SchemaKind {
             }
             SchemaKind::SystemInfoResponse => {
                 include_str!("../tool/system.info.response.schema.json")
+            }
+            SchemaKind::ConfigProposeRequest => {
+                include_str!("../tool/config.propose.request.schema.json")
+            }
+            SchemaKind::ConfigProposeResponse => {
+                include_str!("../tool/config.propose.response.schema.json")
+            }
+            SchemaKind::TxTestRequest => include_str!("../tool/tx.test.request.schema.json"),
+            SchemaKind::TxApplyRequest => include_str!("../tool/tx.apply.request.schema.json"),
+            SchemaKind::TxRollbackRequest => {
+                include_str!("../tool/tx.rollback.request.schema.json")
+            }
+            SchemaKind::TxStatusRequest => include_str!("../tool/tx.status.request.schema.json"),
+            SchemaKind::TxStepResponse => include_str!("../tool/tx.step.response.schema.json"),
+            SchemaKind::TxStatusResponse => {
+                include_str!("../tool/tx.status.response.schema.json")
             }
         }
     }
@@ -109,6 +149,14 @@ impl SchemaKind {
             SafetyVector,
             SystemInfoRequest,
             SystemInfoResponse,
+            ConfigProposeRequest,
+            ConfigProposeResponse,
+            TxTestRequest,
+            TxApplyRequest,
+            TxRollbackRequest,
+            TxStatusRequest,
+            TxStepResponse,
+            TxStatusResponse,
         )
     }
 }

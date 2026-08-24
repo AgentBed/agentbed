@@ -28,6 +28,11 @@ fn schema_for(file_name: &str) -> SchemaKind {
     match file_name {
         n if n.starts_with("tool.system.info.request") => SchemaKind::SystemInfoRequest,
         n if n.starts_with("tool.system.info.response") => SchemaKind::SystemInfoResponse,
+        n if n.starts_with("tool.config.propose.request") => SchemaKind::ConfigProposeRequest,
+        n if n.starts_with("tool.config.propose.response") => SchemaKind::ConfigProposeResponse,
+        n if n.starts_with("tool.tx.status.request") => SchemaKind::TxStatusRequest,
+        n if n.starts_with("tool.tx.status.response") => SchemaKind::TxStatusResponse,
+        n if n.starts_with("tool.tx.step.response") => SchemaKind::TxStepResponse,
         n if n.starts_with("approval.") => SchemaKind::Approval,
         n if n.starts_with("ledger-record.") => SchemaKind::LedgerRecord,
         n if is_yaml(n) => {
@@ -77,7 +82,7 @@ fn every_example_validates() {
         checked += 1;
     }
     assert!(
-        checked >= 10,
+        checked >= 15,
         "expected the full example set, saw {checked}"
     );
 }
@@ -224,4 +229,62 @@ fn ledger_records_name_the_deciding_stage() {
     let mut invented_stage = base;
     invented_stage["decision"]["stage"] = json!("vibes");
     assert!(validate(SchemaKind::LedgerRecord, &invented_stage).is_err());
+}
+
+#[test]
+fn v2_request_schemas_reject_unknown_fields_and_missing_required_keys() {
+    let propose = json!({
+        "idempotency_key": "k",
+        "changes": [{"path": "/etc/nixos/configuration.nix", "content": ""}]
+    });
+    assert!(validate(SchemaKind::ConfigProposeRequest, &propose).is_ok());
+
+    let mut missing_key = propose.clone();
+    missing_key
+        .as_object_mut()
+        .unwrap()
+        .remove("idempotency_key");
+    assert!(validate(SchemaKind::ConfigProposeRequest, &missing_key).is_err());
+
+    let mut unknown = propose;
+    unknown["extra"] = json!(1);
+    assert!(validate(SchemaKind::ConfigProposeRequest, &unknown).is_err());
+
+    let status = json!({"tx_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV"});
+    assert!(validate(SchemaKind::TxStatusRequest, &status).is_ok());
+    assert!(validate(SchemaKind::TxStatusRequest, &json!({})).is_err());
+}
+
+#[test]
+fn v2_response_schemas_reject_malformed_states_and_digests() {
+    let status = json!({
+        "tx_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "state": "PROPOSED",
+        "effect_set": ["D"],
+    });
+    assert!(validate(SchemaKind::TxStatusResponse, &status).is_ok());
+
+    let mut bad_state = status.clone();
+    bad_state["state"] = json!("INVENTED");
+    assert!(validate(SchemaKind::TxStatusResponse, &bad_state).is_err());
+
+    let step = json!({
+        "tx_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "state": "TESTING",
+    });
+    assert!(validate(SchemaKind::TxStepResponse, &step).is_ok());
+
+    let mut propose = json!({
+        "tx_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diff": "x",
+        "test_plan": {"adapter": "nix", "steps": ["test"]},
+        "affected_resources": ["root_config"],
+        "base_revision": {
+            "etc_git_commit": "abc",
+            "config_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+    });
+    assert!(validate(SchemaKind::ConfigProposeResponse, &propose).is_ok());
+    propose["base_revision"]["config_digest"] = json!("deadbeef");
+    assert!(validate(SchemaKind::ConfigProposeResponse, &propose).is_err());
 }

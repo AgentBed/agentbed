@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/tool/tx.apply.request.schema.json",
+  "title": "tx.apply request parameters",
+  "description": "effects.md §3: begin apply/commit for a tested transaction; idempotency key replays return the original result.",
+  "type": "object",
+  "required": ["tx_id", "idempotency_key"],
+  "additionalProperties": false,
+  "properties": {
+    "tx_id": {
+      "type": "string",
+      "minLength": 26,
+      "maxLength": 26,
+      "pattern": "^[0-7][0-9A-Z]{25}$"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[!-~]+$"
+    }
+  }
+}

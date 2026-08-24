@@ -6,3 +6,4 @@
 //! manifest's minimum?" is policy and lives in the broker.
 
 pub mod system_info;
+pub mod transaction;

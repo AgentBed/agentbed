@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/tool/tx.step.response.schema.json",
+  "title": "tx.test / tx.apply / tx.rollback result",
+  "description": "effects.md §3: acknowledgement of the transaction id and durable state after a mutating step.",
+  "type": "object",
+  "required": ["tx_id", "state"],
+  "additionalProperties": false,
+  "properties": {
+    "tx_id": {
+      "type": "string",
+      "minLength": 26,
+      "maxLength": 26,
+      "pattern": "^[0-7][0-9A-Z]{25}$"
+    },
+    "state": {
+      "enum": [
+        "IDLE",
+        "PROPOSED",
+        "TESTING",
+        "APPLYING",
+        "PROBATION",
+        "PROBATION_PASSED",
+        "COMMITTING",
+        "COMMITTED",
+        "REJECTED",
+        "REVERTING",
+        "REVERTED"
+      ]
+    }
+  }
+}

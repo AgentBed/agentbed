@@ -21,6 +21,7 @@ use crate::observability::{CallObservation, ObservationSink};
 use crate::peercred::{peer_credentials, PeerCredentials};
 use agentbed_protocol::frame::{read_frame, write_frame, FrameError, MAX_FRAME_BYTES};
 use agentbed_protocol::wire::{ErrorCode, Response, ResponseError};
+use agentbed_protocol::PROTOCOL_VERSION_V1;
 use std::io;
 use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -236,8 +237,11 @@ fn serve_connection(
                     ErrorCode::InvalidRequest,
                     "zero_length_frame",
                 ));
-                let response =
-                    Response::failed(None, ResponseError::new(ErrorCode::InvalidRequest));
+                let response = Response::failed(
+                    None,
+                    PROTOCOL_VERSION_V1,
+                    ResponseError::new(ErrorCode::InvalidRequest),
+                );
                 if write_response(&mut stream, &response).is_err() {
                     return;
                 }
@@ -248,8 +252,11 @@ fn serve_connection(
                     ErrorCode::InvalidRequest,
                     "oversize_frame",
                 ));
-                let response =
-                    Response::failed(None, ResponseError::new(ErrorCode::InvalidRequest));
+                let response = Response::failed(
+                    None,
+                    PROTOCOL_VERSION_V1,
+                    ResponseError::new(ErrorCode::InvalidRequest),
+                );
                 // Best effort: the peer may not be reading. Either way the
                 // connection closes, because `err` says the position is lost.
                 let _ = write_response(&mut stream, &response);

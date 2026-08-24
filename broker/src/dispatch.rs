@@ -16,9 +16,9 @@
 //! 3. **Load the manifest here** and compute its digest, because the gateway is
 //!    untrusted by the broker (`docs/threat-model.md`, boundary 2).
 //! 4. **Project the operation through its schema**, then build the digest over
-//!    that projection using the construction frozen in `docs/protocol.md` §4:
-//!    `SHA-256(domain || JCS({operation, operation_version, arguments}))`. The
-//!    bytes an approval or ledger record binds are produced here, from the
+//!    that projection using the construction frozen in `docs/protocol.md` §4/§7:
+//!    `SHA-256(domain(protocol) || JCS({operation, operation_version, arguments}))`.
+//!    The bytes an approval or ledger record binds are produced here, from the
 //!    validated typed operation — never from the caller's serialization, never
 //!    accepted from the gateway, and never re-serialized later
 //!    (`docs/effects.md` §1).
@@ -32,16 +32,21 @@ use crate::identity::{AgentContext, TokenStore};
 use crate::manifest::ManifestStore;
 use crate::observability::{CallObservation, ObservationSink};
 use crate::peercred::PeerCredentials;
-use crate::policy::{evaluate, CallAdmission, Decision};
+use crate::policy::{evaluate, CallAdmission, CallDescriptor, Decision};
 use crate::quota::QuotaLedger;
-use crate::tools::system_info;
+use crate::tools::{config_propose, system_info, transaction};
 use agentbed_protocol::digest::Digest;
 use agentbed_protocol::strict;
 use agentbed_protocol::wire::{
-    CallBinding, EffectClass, ErrorCode, OpName, OperationResult, Request, RequestId, Response,
-    ResponseError, SystemInfoParams,
+    CallBinding, ConfigProposeParams, EffectClass, ErrorCode, OpName, OperationResult, Request,
+    RequestId, Response, ResponseError, SystemInfoParams, TxApplyParams, TxRollbackParams,
+    TxStatusParams, TxTestParams,
 };
+use agentbed_protocol::PROTOCOL_VERSION_V1;
 use agentbed_schemas::{validate, SchemaKind};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use serde_json::Value;
 
 /// Everything the request path needs, assembled once at startup.
 pub struct Dispatcher {
@@ -78,6 +83,7 @@ impl Dispatcher {
     }
 
     /// Handle one complete frame body. Always yields exactly one response.
+    #[allow(clippy::too_many_lines)]
     pub fn handle_frame(
         &self,
         body: &[u8],
@@ -85,8 +91,26 @@ impl Dispatcher {
         observer: &dyn ObservationSink,
     ) -> Response {
         let Some(request) = Self::parse(body, peer, observer) else {
-            return Response::failed(None, ResponseError::new(ErrorCode::InvalidRequest));
+            return Response::failed(
+                None,
+                PROTOCOL_VERSION_V1,
+                ResponseError::new(ErrorCode::InvalidRequest),
+            );
         };
+        let protocol = request.v;
+
+        if !request.operation_allowed() {
+            observer.record(CallObservation::rejected(
+                peer,
+                ErrorCode::InvalidRequest,
+                "operation_not_allowed_for_protocol_version",
+            ));
+            return Response::failed(
+                Some(request.id),
+                protocol,
+                ResponseError::new(ErrorCode::InvalidRequest),
+            );
+        }
 
         let Ok(agent) = self.tokens.resolve(request.auth.token.expose()) else {
             observer.record(CallObservation {
@@ -96,32 +120,148 @@ impl Dispatcher {
             });
             return Response::failed(
                 Some(request.id),
+                protocol,
                 ResponseError::new(ErrorCode::Unauthenticated),
             );
         };
 
         match request.op {
             OpName::SystemInfo => {
-                // The operation's own version, distinct from the protocol
-                // version and part of the digest input. An unsupported one is
-                // refused rather than reinterpreted as the version we know.
                 if request.op_version != system_info::VERSION {
-                    observer.record(CallObservation {
-                        request_id: Some(request.id.to_string()),
-                        agent_id: Some(agent.agent_id().to_owned()),
-                        op: Some(request.op.as_str()),
-                        ..CallObservation::rejected(
-                            peer,
-                            ErrorCode::UnsupportedOperation,
-                            "unsupported_operation_version",
-                        )
-                    });
-                    return Response::failed(
-                        Some(request.id),
-                        ResponseError::new(ErrorCode::UnsupportedOperation),
+                    return Self::unsupported_operation_version(
+                        &request,
+                        &agent,
+                        peer,
+                        observer,
+                        system_info::OP,
                     );
                 }
-                self.system_info(&request, &agent, peer, observer)
+                self.system_info(&request, &agent, peer, observer, protocol)
+            }
+            OpName::ConfigPropose => {
+                if request.op_version != config_propose::VERSION {
+                    return Self::unsupported_operation_version(
+                        &request,
+                        &agent,
+                        peer,
+                        observer,
+                        config_propose::OP,
+                    );
+                }
+                self.contract_only(
+                    &request,
+                    &agent,
+                    peer,
+                    observer,
+                    protocol,
+                    config_propose::describe_call(),
+                    config_propose::OP,
+                    SchemaKind::ConfigProposeRequest,
+                    |params| {
+                        serde_json::from_value::<ConfigProposeParams>(params.clone())
+                            .map_err(|_| "params_rejected")
+                    },
+                )
+            }
+            OpName::TxTest => {
+                if request.op_version != transaction::test::VERSION {
+                    return Self::unsupported_operation_version(
+                        &request,
+                        &agent,
+                        peer,
+                        observer,
+                        transaction::test::OP,
+                    );
+                }
+                self.contract_only(
+                    &request,
+                    &agent,
+                    peer,
+                    observer,
+                    protocol,
+                    transaction::test::describe_call(),
+                    transaction::test::OP,
+                    SchemaKind::TxTestRequest,
+                    |params| {
+                        serde_json::from_value::<TxTestParams>(params.clone())
+                            .map_err(|_| "params_rejected")
+                    },
+                )
+            }
+            OpName::TxApply => {
+                if request.op_version != transaction::apply::VERSION {
+                    return Self::unsupported_operation_version(
+                        &request,
+                        &agent,
+                        peer,
+                        observer,
+                        transaction::apply::OP,
+                    );
+                }
+                self.contract_only(
+                    &request,
+                    &agent,
+                    peer,
+                    observer,
+                    protocol,
+                    transaction::apply::describe_call(),
+                    transaction::apply::OP,
+                    SchemaKind::TxApplyRequest,
+                    |params| {
+                        serde_json::from_value::<TxApplyParams>(params.clone())
+                            .map_err(|_| "params_rejected")
+                    },
+                )
+            }
+            OpName::TxRollback => {
+                if request.op_version != transaction::rollback::VERSION {
+                    return Self::unsupported_operation_version(
+                        &request,
+                        &agent,
+                        peer,
+                        observer,
+                        transaction::rollback::OP,
+                    );
+                }
+                self.contract_only(
+                    &request,
+                    &agent,
+                    peer,
+                    observer,
+                    protocol,
+                    transaction::rollback::describe_call(),
+                    transaction::rollback::OP,
+                    SchemaKind::TxRollbackRequest,
+                    |params| {
+                        serde_json::from_value::<TxRollbackParams>(params.clone())
+                            .map_err(|_| "params_rejected")
+                    },
+                )
+            }
+            OpName::TxStatus => {
+                if request.op_version != transaction::status::VERSION {
+                    return Self::unsupported_operation_version(
+                        &request,
+                        &agent,
+                        peer,
+                        observer,
+                        transaction::status::OP,
+                    );
+                }
+                self.contract_only(
+                    &request,
+                    &agent,
+                    peer,
+                    observer,
+                    protocol,
+                    transaction::status::describe_call(),
+                    transaction::status::OP,
+                    SchemaKind::TxStatusRequest,
+                    |params| {
+                        serde_json::from_value::<TxStatusParams>(params.clone())
+                            .map_err(|_| "params_rejected")
+                    },
+                )
             }
         }
     }
@@ -132,37 +272,50 @@ impl Dispatcher {
         agent: &AgentContext,
         peer: PeerCredentials,
         observer: &dyn ObservationSink,
+        protocol: u8,
     ) -> Response {
         let id = request.id.clone();
 
-        // (4) Project through the typed shape, validate the projection
-        // against the published schema, canonicalize it and digest those bytes.
-        let operation_digest = match Self::project_and_digest(request) {
+        let operation_digest = match Self::project_and_digest::<SystemInfoParams>(
+            protocol,
+            system_info::OP,
+            system_info::VERSION,
+            &request.params,
+            SchemaKind::SystemInfoRequest,
+        ) {
             Ok(digest) => digest,
             Err((error, reason)) => {
-                return Self::refuse(&id, agent, peer, observer, error, reason, None)
+                return Self::refuse(
+                    &id,
+                    agent,
+                    peer,
+                    observer,
+                    protocol,
+                    error,
+                    reason,
+                    None,
+                    system_info::OP,
+                    vec![EffectClass::R],
+                )
             }
         };
 
-        // (3) Load and digest the manifest here, not upstream.
-        // No manifest, no authorization. A missing or unloadable manifest is a
-        // refusal, never a default-allow.
         let Ok(manifest) = self.manifests.load(agent.manifest_ref()) else {
             return Self::refuse(
                 &id,
                 agent,
                 peer,
                 observer,
+                protocol,
                 ResponseError::new(ErrorCode::Denied),
                 "manifest_unavailable",
                 Some(operation_digest),
+                system_info::OP,
+                vec![EffectClass::R],
             );
         };
 
-        // (5) Effect set and the five-stage ladder.
         let call = system_info::describe_call();
-        // Stage 5 admits through this handle: check and count happen under one
-        // lock, so concurrent calls at the boundary cannot both be allowed.
         let admission = AgentAdmission {
             ledger: &self.quotas,
             agent_id: agent.agent_id(),
@@ -188,12 +341,9 @@ impl Dispatcher {
                     error: Some(code),
                     reason,
                 });
-                Response::failed(Some(id), ResponseError::at_stage(code, stage))
+                Response::failed(Some(id), protocol, ResponseError::at_stage(code, stage))
             }
             Decision::Allow => {
-                // Already counted: the ladder's stage 5 admitted this call, and
-                // admission is the charge. A call that ran has been paid for
-                // even if the response never reaches the caller.
                 let info = system_info::execute(self.adapter.as_ref());
                 let binding = CallBinding {
                     agent_id: agent.agent_id().to_owned(),
@@ -214,45 +364,196 @@ impl Dispatcher {
                     error: None,
                     reason: "authorized",
                 });
-                Response::ok(id, OperationResult::SystemInfo(Box::new(info)), binding)
+                Response::ok(
+                    id,
+                    protocol,
+                    OperationResult::SystemInfo(Box::new(info)),
+                    binding,
+                )
             }
         }
     }
 
-    /// Project the request's parameters through their typed shape, validate
-    /// that projection against the published schema, and digest its RFC 8785
-    /// canonical bytes.
-    ///
-    /// The order matters: the digest is taken over what the broker *validated*,
-    /// not over what the caller sent, so the bytes an approval or ledger record
-    /// binds describe the operation as it will actually be executed.
-    fn project_and_digest(request: &Request) -> Result<Digest, (ResponseError, &'static str)> {
-        // Unknown parameters are refused rather than ignored: an argument the
-        // broker does not understand could be one that raises the effect set.
-        let params =
-            serde_json::from_value::<SystemInfoParams>(request.params.clone()).map_err(|_| {
-                (
-                    ResponseError::new(ErrorCode::InvalidRequest),
-                    "params_rejected",
+    /// Validate, digest, and evaluate policy for a v2 contract operation whose
+    /// execution lands in a later Gate 1 lane.
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    fn contract_only<P, F>(
+        &self,
+        request: &Request,
+        agent: &AgentContext,
+        peer: PeerCredentials,
+        observer: &dyn ObservationSink,
+        protocol: u8,
+        call: CallDescriptor,
+        op: &'static str,
+        schema: SchemaKind,
+        project: F,
+    ) -> Response
+    where
+        P: DeserializeOwned + Serialize,
+        F: FnOnce(&Value) -> Result<P, &'static str>,
+    {
+        let id = request.id.clone();
+
+        let operation_digest = match Self::project_and_digest_with(
+            protocol,
+            op,
+            request.op_version,
+            &request.params,
+            schema,
+            project,
+        ) {
+            Ok(digest) => digest,
+            Err((error, reason)) => {
+                return Self::refuse(
+                    &id,
+                    agent,
+                    peer,
+                    observer,
+                    protocol,
+                    error,
+                    reason,
+                    None,
+                    op,
+                    call.effect_set.clone(),
                 )
-            })?;
-        let projected = serde_json::to_value(&params).map_err(|_| {
+            }
+        };
+
+        let Ok(manifest) = self.manifests.load(agent.manifest_ref()) else {
+            return Self::refuse(
+                &id,
+                agent,
+                peer,
+                observer,
+                protocol,
+                ResponseError::new(ErrorCode::Denied),
+                "manifest_unavailable",
+                Some(operation_digest),
+                op,
+                call.effect_set.clone(),
+            );
+        };
+
+        let admission = AgentAdmission {
+            ledger: &self.quotas,
+            agent_id: agent.agent_id(),
+        };
+        let decision = evaluate(&call, &manifest, &self.adapter.safety_vector(), &admission);
+
+        match decision {
+            Decision::Refuse {
+                code,
+                stage,
+                reason,
+            } => {
+                observer.record(CallObservation {
+                    request_id: Some(id.to_string()),
+                    agent_id: Some(agent.agent_id().to_owned()),
+                    peer,
+                    op: Some(op),
+                    effect_set: call.effect_set.clone(),
+                    manifest_digest: Some(manifest.digest().clone()),
+                    operation_digest: Some(operation_digest),
+                    allowed: false,
+                    stage: Some(stage),
+                    error: Some(code),
+                    reason,
+                });
+                Response::failed(Some(id), protocol, ResponseError::at_stage(code, stage))
+            }
+            Decision::Allow => {
+                observer.record(CallObservation {
+                    request_id: Some(id.to_string()),
+                    agent_id: Some(agent.agent_id().to_owned()),
+                    peer,
+                    op: Some(op),
+                    effect_set: call.effect_set.clone(),
+                    manifest_digest: Some(manifest.digest().clone()),
+                    operation_digest: Some(operation_digest),
+                    allowed: false,
+                    stage: None,
+                    error: Some(ErrorCode::Internal),
+                    reason: "execution_not_implemented_at_l00",
+                });
+                Response::failed(Some(id), protocol, ResponseError::new(ErrorCode::Internal))
+            }
+        }
+    }
+
+    fn unsupported_operation_version(
+        request: &Request,
+        agent: &AgentContext,
+        peer: PeerCredentials,
+        observer: &dyn ObservationSink,
+        op: &'static str,
+    ) -> Response {
+        observer.record(CallObservation {
+            request_id: Some(request.id.to_string()),
+            agent_id: Some(agent.agent_id().to_owned()),
+            op: Some(op),
+            ..CallObservation::rejected(
+                peer,
+                ErrorCode::UnsupportedOperation,
+                "unsupported_operation_version",
+            )
+        });
+        Response::failed(
+            Some(request.id.clone()),
+            request.v,
+            ResponseError::new(ErrorCode::UnsupportedOperation),
+        )
+    }
+
+    fn project_and_digest<P>(
+        protocol: u8,
+        operation: &'static str,
+        operation_version: u32,
+        params: &Value,
+        schema: SchemaKind,
+    ) -> Result<Digest, (ResponseError, &'static str)>
+    where
+        P: DeserializeOwned + Serialize,
+    {
+        Self::project_and_digest_with(
+            protocol,
+            operation,
+            operation_version,
+            params,
+            schema,
+            |value| serde_json::from_value::<P>(value.clone()).map_err(|_| "params_rejected"),
+        )
+    }
+
+    fn project_and_digest_with<P, F>(
+        protocol: u8,
+        operation: &'static str,
+        operation_version: u32,
+        params: &Value,
+        schema: SchemaKind,
+        project: F,
+    ) -> Result<Digest, (ResponseError, &'static str)>
+    where
+        P: DeserializeOwned + Serialize,
+        F: FnOnce(&Value) -> Result<P, &'static str>,
+    {
+        let typed = project(params)
+            .map_err(|reason| (ResponseError::new(ErrorCode::InvalidRequest), reason))?;
+        let projected = serde_json::to_value(&typed).map_err(|_| {
             (
                 ResponseError::new(ErrorCode::Internal),
                 "params_not_serializable",
             )
         })?;
 
-        // The gateway validates too; neither result is trusted by the other,
-        // and only this one gates execution.
-        validate(SchemaKind::SystemInfoRequest, &projected).map_err(|_| {
+        validate(schema, &projected).map_err(|_| {
             (
                 ResponseError::new(ErrorCode::InvalidRequest),
                 "params_failed_schema",
             )
         })?;
 
-        let canonical = OperationDigest::of(system_info::OP, system_info::VERSION, &projected)
+        let canonical = OperationDigest::of(protocol, operation, operation_version, &projected)
             .map_err(|_| {
                 (
                     ResponseError::new(ErrorCode::Internal),
@@ -270,16 +571,19 @@ impl Dispatcher {
         agent: &AgentContext,
         peer: PeerCredentials,
         observer: &dyn ObservationSink,
+        protocol: u8,
         error: ResponseError,
         reason: &'static str,
         operation_digest: Option<Digest>,
+        op: &'static str,
+        effect_set: Vec<EffectClass>,
     ) -> Response {
         observer.record(CallObservation {
             request_id: Some(id.to_string()),
             agent_id: Some(agent.agent_id().to_owned()),
             peer,
-            op: Some(system_info::OP),
-            effect_set: vec![EffectClass::R],
+            op: Some(op),
+            effect_set,
             manifest_digest: None,
             operation_digest,
             allowed: false,
@@ -287,7 +591,7 @@ impl Dispatcher {
             error: Some(error.code),
             reason,
         });
-        Response::failed(Some(id.clone()), error)
+        Response::failed(Some(id.clone()), protocol, error)
     }
 
     /// Strict parse plus version check. Returns `None` when the frame is not a
@@ -305,8 +609,6 @@ impl Dispatcher {
             ));
             return None;
         };
-        // Covers unknown fields (an asserted agent_id lands here), unknown
-        // operations, and malformed envelopes alike.
         let Ok(request) = serde_json::from_value::<Request>(value) else {
             observer.record(CallObservation::rejected(
                 peer,

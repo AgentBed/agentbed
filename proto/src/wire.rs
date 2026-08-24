@@ -17,12 +17,19 @@
 
 use crate::digest::Digest;
 use crate::dto::system_info::SystemInfo;
-use crate::PROTOCOL_VERSION;
+use crate::dto::transaction::{ConfigProposeResult, TxId, TxStatusResult, TxStepResult};
+use crate::{PROTOCOL_VERSION_V1, PROTOCOL_VERSION_V2, SUPPORTED_PROTOCOL_VERSIONS};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 /// Maximum length of a correlation id, in bytes.
 pub const MAX_REQUEST_ID_BYTES: usize = 64;
+
+/// Maximum length of an idempotency key, in bytes.
+pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 128;
+
+/// Maximum length of a ULID transaction id, in bytes (Crockford base32).
+pub const TX_ID_BYTES: usize = 26;
 
 /// Caller-chosen correlation id, echoed back on the response.
 ///
@@ -68,6 +75,74 @@ impl fmt::Display for RequestId {
     }
 }
 
+/// Idempotency key for D/M operations (`docs/effects.md` §3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IdempotencyKey(String);
+
+impl IdempotencyKey {
+    /// Validate and wrap.
+    pub fn new(raw: impl Into<String>) -> Result<Self, &'static str> {
+        let raw = raw.into();
+        if raw.is_empty() {
+            return Err("idempotency key is empty");
+        }
+        if raw.len() > MAX_IDEMPOTENCY_KEY_BYTES {
+            return Err("idempotency key too long");
+        }
+        if !raw.bytes().all(|b| b.is_ascii_graphic()) {
+            return Err("idempotency key contains non-graphic ASCII");
+        }
+        Ok(IdempotencyKey(raw))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for IdempotencyKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let raw = String::deserialize(deserializer)?;
+        IdempotencyKey::new(raw).map_err(D::Error::custom)
+    }
+}
+
+/// Crockford base32 alphabet for ULID transaction ids.
+const CROCKFORD: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// Transaction identifier (ULID).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TransactionId(TxId);
+
+impl TransactionId {
+    /// Validate and wrap.
+    pub fn new(raw: impl Into<String>) -> Result<Self, &'static str> {
+        let raw = raw.into();
+        if raw.len() != TX_ID_BYTES {
+            return Err("tx_id must be 26 bytes");
+        }
+        if !raw.chars().all(|c| CROCKFORD.contains(c)) {
+            return Err("tx_id must be Crockford base32");
+        }
+        Ok(TransactionId(raw))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for TransactionId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let raw = String::deserialize(deserializer)?;
+        TransactionId::new(raw).map_err(D::Error::custom)
+    }
+}
+
 /// A bearer token presented by the caller.
 ///
 /// `Debug` is redacted: tokens must not reach logs, panic messages, or error
@@ -106,7 +181,7 @@ pub struct Auth {
     pub token: Token,
 }
 
-/// The closed set of operations. Gate 0 exposes exactly one.
+/// The closed set of operations known to this crate.
 ///
 /// Adding an operation is a code change here plus a match arm in the broker's
 /// dispatcher — there is no registry, no string lookup, and no dynamic
@@ -116,6 +191,21 @@ pub enum OpName {
     /// `system.info` — read-only host facts, adapter state, safety vector.
     #[serde(rename = "system.info")]
     SystemInfo,
+    /// `config.propose` — stage a declarative change set (protocol v2 only).
+    #[serde(rename = "config.propose")]
+    ConfigPropose,
+    /// `tx.test` — run the test activation for a staged transaction.
+    #[serde(rename = "tx.test")]
+    TxTest,
+    /// `tx.apply` — begin apply/commit for a tested transaction.
+    #[serde(rename = "tx.apply")]
+    TxApply,
+    /// `tx.rollback` — request revert of a transaction (new forward revert).
+    #[serde(rename = "tx.rollback")]
+    TxRollback,
+    /// `tx.status` — read transaction state.
+    #[serde(rename = "tx.status")]
+    TxStatus,
 }
 
 impl OpName {
@@ -124,7 +214,32 @@ impl OpName {
     pub fn as_str(self) -> &'static str {
         match self {
             OpName::SystemInfo => "system.info",
+            OpName::ConfigPropose => "config.propose",
+            OpName::TxTest => "tx.test",
+            OpName::TxApply => "tx.apply",
+            OpName::TxRollback => "tx.rollback",
+            OpName::TxStatus => "tx.status",
         }
+    }
+
+    /// Operations legal under protocol v1 (`docs/protocol.md` §2).
+    #[must_use]
+    pub fn allowed_in_v1(self) -> bool {
+        matches!(self, OpName::SystemInfo)
+    }
+
+    /// Operations legal under protocol v2 (`docs/protocol.md` §7).
+    #[must_use]
+    pub fn allowed_in_v2(self) -> bool {
+        matches!(
+            self,
+            OpName::SystemInfo
+                | OpName::ConfigPropose
+                | OpName::TxTest
+                | OpName::TxApply
+                | OpName::TxRollback
+                | OpName::TxStatus
+        )
     }
 }
 
@@ -134,11 +249,57 @@ impl OpName {
 #[serde(deny_unknown_fields)]
 pub struct SystemInfoParams {}
 
+/// One declarative file change for `config.propose`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigFileChange {
+    pub path: String,
+    pub content: String,
+}
+
+/// Parameters of `config.propose` at operation version 1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigProposeParams {
+    pub idempotency_key: IdempotencyKey,
+    pub changes: Vec<ConfigFileChange>,
+}
+
+/// Parameters of `tx.test` at operation version 1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TxTestParams {
+    pub tx_id: TransactionId,
+}
+
+/// Parameters of `tx.apply` at operation version 1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TxApplyParams {
+    pub tx_id: TransactionId,
+    pub idempotency_key: IdempotencyKey,
+}
+
+/// Parameters of `tx.rollback` at operation version 1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TxRollbackParams {
+    pub tx_id: TransactionId,
+    pub idempotency_key: IdempotencyKey,
+}
+
+/// Parameters of `tx.status` at operation version 1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TxStatusParams {
+    pub tx_id: TransactionId,
+}
+
 /// A broker request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// Protocol version; must equal [`PROTOCOL_VERSION`].
+    /// Protocol version; must be one of [`SUPPORTED_PROTOCOL_VERSIONS`].
     pub v: u8,
     /// Correlation id, echoed on the response.
     pub id: RequestId,
@@ -165,12 +326,28 @@ fn default_op_version() -> u32 {
 }
 
 impl Request {
+    /// Whether `v` is one this crate recognizes.
+    #[must_use]
+    pub fn protocol_supported(&self) -> bool {
+        SUPPORTED_PROTOCOL_VERSIONS.contains(&self.v)
+    }
+
+    /// Whether `op` is legal for this request's protocol version.
+    #[must_use]
+    pub fn operation_allowed(&self) -> bool {
+        match self.v {
+            PROTOCOL_VERSION_V1 => self.op.allowed_in_v1(),
+            PROTOCOL_VERSION_V2 => self.op.allowed_in_v2(),
+            _ => false,
+        }
+    }
+
     /// Check the protocol version. Kept separate from deserialization so the
     /// broker can answer a version mismatch with a structured error instead of
     /// a parse failure.
     #[must_use]
     pub fn version_supported(&self) -> bool {
-        self.v == PROTOCOL_VERSION
+        self.protocol_supported()
     }
 }
 
@@ -301,13 +478,28 @@ pub enum OperationResult {
     /// Result of `system.info`.
     #[serde(rename = "system.info")]
     SystemInfo(Box<SystemInfo>),
+    /// Result of `config.propose`.
+    #[serde(rename = "config.propose")]
+    ConfigPropose(Box<ConfigProposeResult>),
+    /// Result of `tx.test`.
+    #[serde(rename = "tx.test")]
+    TxTest(Box<TxStepResult>),
+    /// Result of `tx.apply`.
+    #[serde(rename = "tx.apply")]
+    TxApply(Box<TxStepResult>),
+    /// Result of `tx.rollback`.
+    #[serde(rename = "tx.rollback")]
+    TxRollback(Box<TxStepResult>),
+    /// Result of `tx.status`.
+    #[serde(rename = "tx.status")]
+    TxStatus(Box<TxStatusResult>),
 }
 
 /// A broker response: exactly one of `result` or `error` is present.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Response {
-    /// Protocol version.
+    /// Protocol version — must equal the request's `v`.
     pub v: u8,
     /// Correlation id; absent when the request was too malformed to yield one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -326,9 +518,9 @@ pub struct Response {
 impl Response {
     /// A successful response with its binding.
     #[must_use]
-    pub fn ok(id: RequestId, result: OperationResult, binding: CallBinding) -> Self {
+    pub fn ok(id: RequestId, protocol: u8, result: OperationResult, binding: CallBinding) -> Self {
         Response {
-            v: PROTOCOL_VERSION,
+            v: protocol,
             id: Some(id),
             result: Some(result),
             binding: Some(binding),
@@ -338,9 +530,9 @@ impl Response {
 
     /// A refusal, correlated where possible.
     #[must_use]
-    pub fn failed(id: Option<RequestId>, error: ResponseError) -> Self {
+    pub fn failed(id: Option<RequestId>, protocol: u8, error: ResponseError) -> Self {
         Response {
-            v: PROTOCOL_VERSION,
+            v: protocol,
             id,
             result: None,
             binding: None,
@@ -459,5 +651,30 @@ mod tests {
         assert_eq!(DecisionStage::OperationPolicy.ordinal(), 3);
         assert_eq!(DecisionStage::ClassCeiling.ordinal(), 4);
         assert_eq!(DecisionStage::Quota.ordinal(), 5);
+    }
+
+    #[test]
+    fn v2_operations_parse_but_v1_rejects_them_at_dispatch() {
+        let raw = r#"{"v":1,"id":"01J","op":"tx.status","auth":{"token":"t"},"params":{"tx_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV"}}"#;
+        let req = parse_request(raw).unwrap();
+        assert!(req.protocol_supported());
+        assert!(!req.operation_allowed());
+    }
+
+    #[test]
+    fn unknown_protocol_versions_are_not_supported() {
+        let raw = r#"{"v":3,"id":"01J","op":"system.info","auth":{"token":"t"},"params":{}}"#;
+        let req = parse_request(raw).unwrap();
+        assert!(!req.protocol_supported());
+    }
+
+    #[test]
+    fn response_echoes_request_protocol_version() {
+        let response = Response::failed(
+            Some(RequestId::new("x").unwrap()),
+            PROTOCOL_VERSION_V2,
+            ResponseError::new(ErrorCode::InvalidRequest),
+        );
+        assert_eq!(response.v, PROTOCOL_VERSION_V2);
     }
 }

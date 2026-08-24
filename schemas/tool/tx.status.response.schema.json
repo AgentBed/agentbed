@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/tool/tx.status.response.schema.json",
+  "title": "tx.status result",
+  "description": "ADR-001 §5.1 / effects.md §3: read-only transaction state and effect set.",
+  "type": "object",
+  "required": ["tx_id", "state", "effect_set"],
+  "additionalProperties": false,
+  "properties": {
+    "tx_id": {
+      "type": "string",
+      "minLength": 26,
+      "maxLength": 26,
+      "pattern": "^[0-7][0-9A-Z]{25}$"
+    },
+    "state": {
+      "enum": [
+        "IDLE",
+        "PROPOSED",
+        "TESTING",
+        "APPLYING",
+        "PROBATION",
+        "PROBATION_PASSED",
+        "COMMITTING",
+        "COMMITTED",
+        "REJECTED",
+        "REVERTING",
+        "REVERTED"
+      ]
+    },
+    "effect_set": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "enum": ["R", "D", "M", "E", "F"] }
+    },
+    "base_revision": {
+      "type": "object",
+      "required": ["etc_git_commit", "config_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "generation": { "type": ["string", "null"] },
+        "etc_git_commit": { "type": "string" },
+        "config_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}
