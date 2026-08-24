@@ -70,3 +70,13 @@ cargo test --workspace                                PASS
 | Raw JSON event cursors | `EventCursor` encodes/decodes base64url per sealed plan |
 
 Repair tests: `broker/tests/l01_repair_review.rs` (13), `gw/tests/events_resource.rs` (1). See `plans/AGB-4/red-evidence.txt` for RED→GREEN trace.
+
+## Repair round 3 (review #5010933840 @ `db27b7a`)
+
+| Finding | Fix |
+|---|---|
+| Transaction ID collision on restart | `ulid::Ulid` generation; ambiguous duplicate-`Proposed` WAL recovery enters safe mode |
+| PID-derived event log identity | Persisted UUID `log_id`; strict nonempty UUID cursor validation |
+| Moved-base apply not idempotently replayable | `replay_apply` + idempotency record on moved-base `Rejected` refusal |
+
+Repair tests: `broker/tests/l01_repair_review.rs` (19), `gw/tests/events_resource.rs` (1).

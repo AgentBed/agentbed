@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 /// One append-only event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +81,7 @@ impl EventCursor {
         let json = String::from_utf8(json).map_err(|_| EventError::MalformedCursor)?;
         let body: CursorBody =
             serde_json::from_str(&json).map_err(|_| EventError::MalformedCursor)?;
+        validate_log_id(&body.log_id)?;
         Ok(Self {
             log_id: body.log_id,
             seq: body.seq,
@@ -118,20 +120,26 @@ impl EventLog {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, EventError> {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(&root).map_err(|_| EventError::Io(DurabilityError::Io))?;
+        let durability = Arc::new(RealDurability);
         let meta_path = root.join("meta.json");
         let meta = if meta_path.exists() {
             let text = std::fs::read_to_string(&meta_path)
                 .map_err(|_| EventError::Io(DurabilityError::Io))?;
-            serde_json::from_str(&text).map_err(|_| EventError::MalformedCursor)?
+            let meta: EventMeta =
+                serde_json::from_str(&text).map_err(|_| EventError::MalformedCursor)?;
+            validate_log_id(&meta.log_id)?;
+            meta
         } else {
-            EventMeta {
-                log_id: format!("log-{}", std::process::id()),
+            let meta = EventMeta {
+                log_id: Uuid::new_v4().to_string(),
                 next_seq: 1,
-            }
+            };
+            persist_meta(&root, durability.as_ref(), &meta)?;
+            meta
         };
         Ok(Self {
             root,
-            durability: Arc::new(RealDurability),
+            durability,
             meta: Mutex::new(meta),
         })
     }
@@ -190,13 +198,9 @@ impl EventLog {
     }
 
     pub fn replay(&self, cursor: &EventCursor) -> Result<Vec<StoredEvent>, EventError> {
+        validate_log_id(&cursor.log_id)?;
         let meta = self.meta.lock().expect("meta lock");
-        let effective_log_id = if cursor.log_id.is_empty() {
-            meta.log_id.clone()
-        } else {
-            cursor.log_id.clone()
-        };
-        if effective_log_id != meta.log_id {
+        if cursor.log_id != meta.log_id {
             return Err(EventError::ForeignLog);
         }
         let events = self.read_all()?;
@@ -238,4 +242,29 @@ impl EventLog {
         }
         Ok(out)
     }
+}
+
+fn validate_log_id(log_id: &str) -> Result<(), EventError> {
+    if log_id.is_empty() {
+        return Err(EventError::MalformedCursor);
+    }
+    Uuid::parse_str(log_id).map_err(|_| EventError::MalformedCursor)?;
+    Ok(())
+}
+
+fn persist_meta(
+    root: &Path,
+    durability: &dyn DurabilityOps,
+    meta: &EventMeta,
+) -> Result<(), EventError> {
+    let meta_path = root.join("meta.json");
+    let meta_bytes = serde_json::to_vec(meta).map_err(|_| EventError::MalformedCursor)?;
+    let temp = root.join("meta.json.tmp");
+    durability
+        .write_all_and_sync(&temp, &meta_bytes)
+        .map_err(EventError::Io)?;
+    durability
+        .atomic_rename(&temp, &meta_path)
+        .map_err(EventError::Io)?;
+    Ok(())
 }

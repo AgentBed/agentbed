@@ -31,7 +31,7 @@ fn cursor_replay_is_strictly_after_acknowledged_event() {
         })
         .collect();
 
-    let cursor = EventCursor::after(&ids[1]);
+    let cursor = log.cursor_after(&ids[1]);
     let replay = log.replay(&cursor).expect("replay");
     assert_eq!(replay.len(), 3);
     assert_eq!(replay[0].seq, ids[2].seq);
@@ -53,7 +53,7 @@ fn cursor_survives_restart_without_loss_or_duplication() {
                 payload: "{}".to_owned(),
             })
             .expect("append");
-        EventCursor::after(&second)
+        EventCursor::after(&second).with_log_id(log.log_id())
     };
 
     {
@@ -88,7 +88,10 @@ fn malformed_and_beyond_tail_cursors_are_rejected() {
 
     assert!(EventCursor::parse("not-valid").is_err());
     assert!(log
-        .replay(&EventCursor::foreign("other-log", first.seq))
+        .replay(&EventCursor::foreign(
+            "00000000-0000-4000-8000-000000000001",
+            first.seq
+        ))
         .is_err());
 
     let beyond = EventCursor::after_seq(log.log_id(), first.seq + 10_000);

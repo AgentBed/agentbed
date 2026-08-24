@@ -110,7 +110,21 @@ impl TransactionEngine {
         let mut txs = HashMap::new();
         let mut next_seq = 0_u64;
         if !safe_mode {
+            let mut latest_by_tx: HashMap<TxId, &WalRecord> = HashMap::new();
             for record in &recovery.records {
+                if let Some(prev) = latest_by_tx.get(&record.tx_id) {
+                    if record.seq <= prev.seq {
+                        safe_mode = true;
+                        txs.clear();
+                        break;
+                    }
+                    if record.state == prev.state && record.state == WireState::Proposed {
+                        safe_mode = true;
+                        txs.clear();
+                        break;
+                    }
+                }
+                latest_by_tx.insert(record.tx_id.clone(), record);
                 next_seq = next_seq.max(record.seq);
                 txs.insert(
                     record.tx_id.clone(),
@@ -248,7 +262,7 @@ impl TransactionEngine {
             if entry.fingerprint != fingerprint {
                 return Err(EngineError::IdempotencyConflict);
             }
-            return replay_step(&entry);
+            return replay_apply(&entry);
         }
 
         let snap = self
@@ -257,16 +271,27 @@ impl TransactionEngine {
         ensure_owner(&snap, agent_id, &digest)?;
         let current = self.adapter.current_base_revision();
         if snap.base_revision != current {
+            let refusal = TxStepResult {
+                tx_id: params.tx_id.as_str().to_owned(),
+                state: WireState::Rejected,
+            };
+            let result_json = serde_json::to_string(&refusal).map_err(|_| EngineError::SafeMode)?;
             self.transition(
                 &snap.agent_id,
                 &snap.manifest_digest,
                 params.tx_id.as_str(),
                 TransactionState::Rejected,
-                None,
-                None,
+                Some(params.idempotency_key.as_str().to_owned()),
+                Some(fingerprint.clone()),
                 None,
                 None,
             )?;
+            self.record_idempotency(IdempotencyRecord {
+                key,
+                tx_id: params.tx_id.as_str().to_owned(),
+                fingerprint,
+                result_json,
+            })?;
             return Err(EngineError::BaseRevisionMoved);
         }
         self.transition(
@@ -545,16 +570,18 @@ fn replay_propose(entry: &IdempotencyRecord) -> Result<ConfigProposeOutcome, Eng
     })
 }
 
-fn replay_step(entry: &IdempotencyRecord) -> Result<TxStepResult, EngineError> {
-    serde_json::from_str(&entry.result_json).map_err(|_| EngineError::IdempotencyConflict)
+fn replay_apply(entry: &IdempotencyRecord) -> Result<TxStepResult, EngineError> {
+    let step: TxStepResult =
+        serde_json::from_str(&entry.result_json).map_err(|_| EngineError::IdempotencyConflict)?;
+    if step.state == WireState::Rejected {
+        return Err(EngineError::BaseRevisionMoved);
+    }
+    Ok(step)
 }
 
 fn idem_key(agent_id: &str, op: &str, key: &str) -> String {
     format!("{agent_id}:{op}:{key}")
 }
-
-/// 19-char fixed prefix for hermetic ULID-shaped transaction ids in tests.
-const TX_ID_PREFIX: &str = "01ARZ3NDEKTSV4RRFFQ";
 
 fn propose_fingerprint(params: &ConfigProposeParams) -> String {
     serde_json::to_string(params).unwrap_or_default()
@@ -565,9 +592,5 @@ fn apply_fingerprint(params: &TxApplyParams) -> String {
 }
 
 fn new_tx_id() -> TxId {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let suffix = format!("{:07X}", n % 0x0FFF_FFFF);
-    format!("{TX_ID_PREFIX}{suffix}")
+    ulid::Ulid::new().to_string()
 }
