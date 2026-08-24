@@ -87,7 +87,7 @@ impl IdempotencyStore {
             let Some(result_json) = record.result_json.as_ref() else {
                 continue;
             };
-            let Some(op) = op_for_state(record.state) else {
+            let Some(op) = op_for_state(record.state, record.result_json.as_deref()) else {
                 continue;
             };
             let binding_key = format!("{}:{op}:{key}", record.agent_id);
@@ -106,12 +106,23 @@ impl IdempotencyStore {
     }
 }
 
-fn op_for_state(state: TransactionState) -> Option<&'static str> {
+fn op_for_state(state: TransactionState, result_json: Option<&str>) -> Option<&'static str> {
     match state {
         TransactionState::Proposed => Some("config.propose"),
         TransactionState::Applying => Some("tx.apply"),
+        TransactionState::Rejected => apply_refusal_result(result_json).then_some("tx.apply"),
         _ => None,
     }
+}
+
+fn apply_refusal_result(result_json: Option<&str>) -> bool {
+    let Some(raw) = result_json else {
+        return false;
+    };
+    matches!(
+        serde_json::from_str::<agentbed_protocol::dto::transaction::TxStepResult>(raw),
+        Ok(step) if step.state == TransactionState::Rejected
+    )
 }
 
 fn hash_key(key: &str) -> u64 {

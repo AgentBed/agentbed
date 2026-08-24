@@ -91,3 +91,26 @@ Repair tests: `broker/tests/l01_repair_review.rs` (19), `gw/tests/events_resourc
 | Idempotency write/rename fault injection | Filesystem chmod / rename-blocker tests in `l01_repair_review.rs` |
 
 Repair tests: `broker/tests/l01_repair_review.rs` (32).
+
+## Repair round 5 (native review #5011747127 @ `236f75e` RED checkpoint)
+
+| Finding | Fix |
+| --- | --- |
+| Immutable WAL payload drift (`effect_set`, `diff`, `affected_resources`, `approval_ref`) | `broker/src/transaction/recovery.rs` rejects cross-record drift before rebuilding `txs`; invalid chains enter safe mode |
+| Conflicting `config.propose` after idempotency-index write/rename fault (immediate) | `broker/src/transaction/engine.rs` WAL idempotency lookup returns `IdempotencyConflict` on fingerprint mismatch even when the on-disk idempotency file is missing |
+| Moved-base `tx.apply` refusal after idempotency fault: replay must return `BaseRevisionMoved` without duplicate WAL/event | `broker/src/transaction/engine.rs` soft-reverts appended WAL on idempotency failure, completes partial refusals via in-place WAL rewrite + idempotency repair; `broker/src/storage/wal.rs` `rewrite_transition` |
+| `tx.apply` moved-base idempotency rebuild on restart | `broker/src/storage/idempotency.rs` indexes `Rejected` apply refusals from WAL `result_json` during `merge_from_wal` |
+
+RED matrix @ `236f75e` (unpiped, `--test-threads=1`): **10 FAIL / 34 PASS** (cells 1–4 payload drift, 5/7 conflicting propose immediate, 9–12 moved-base idempotency ordering).
+
+GREEN @ this commit:
+
+```text
+cargo test -p agentbed-broker --test l01_repair_review -- --test-threads=1   # 44 passed
+cargo fmt --all -- --check                                                   # PASS
+cargo clippy --workspace --all-targets -- -D warnings                        # FAIL (immutable RED test `l01_repair_review.rs:1117` `clippy::indexing_slicing`; production sources clean)
+cargo build --workspace --all-targets                                        # PASS
+cargo test --workspace                                                       # PASS
+```
+
+Production files changed: `broker/src/transaction/{recovery,engine}.rs`, `broker/src/storage/{wal,idempotency}.rs`. Test hash unchanged: `7da8f021b1e59067773c5d6ef75ed9213487474453e1a9e25a16b4da6fe30ff0` (`broker/tests/l01_repair_review.rs`).

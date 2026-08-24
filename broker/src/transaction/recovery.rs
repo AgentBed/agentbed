@@ -38,6 +38,10 @@ pub fn validate_wal_semantics(records: &[WalRecord]) -> bool {
             if prev.agent_id != next.agent_id
                 || prev.manifest_digest != next.manifest_digest
                 || prev.base_revision != next.base_revision
+                || prev.effect_set != next.effect_set
+                || prev.diff != next.diff
+                || prev.affected_resources != next.affected_resources
+                || prev.approval_ref != next.approval_ref
             {
                 return false;
             }
