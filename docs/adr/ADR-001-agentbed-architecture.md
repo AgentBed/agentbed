@@ -1,6 +1,6 @@
 # ADR-001: Agentbed — an AI-native layer for Linux
 
-**Status:** **ACCEPTED WITH CONDITIONS** (reviews codex-003/004/005) — **Revision 6** (2026-08-23), incorporating reviews [codex-001](../review-responses/codex-001.md) through [codex-005](../review-responses/codex-005.md). Gate 0 open; per-gate conditions in [roadmap.md](../roadmap.md).
+**Status:** **ACCEPTED WITH CONDITIONS** (reviews codex-003/004/005) — **Revision 6** (2026-08-23), incorporating reviews [codex-001](../review-responses/codex-001.md) through [codex-005](../review-responses/codex-005.md). **Gate 0 closed** ([evidence](../evidence/gate-0.md)), **Gate 1 open**; per-gate conditions in [roadmap.md](../roadmap.md).
 **Date:** 2026-08-22 (rev. 2026-08-23)
 **Deciders:** L-P (owner). Reviewers: Codex (independent), Claude, Hermes "architect" bot.
 **Scope:** Gates 0–3 (NixOS-only alpha). Later gates are sketched, not decided. See [roadmap](../roadmap.md).
