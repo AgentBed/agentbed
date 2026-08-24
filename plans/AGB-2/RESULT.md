@@ -3,6 +3,7 @@
 **Issue:** AGB-2 · parent AGB-1 · GitHub #12  
 **Workflow:** `workflow:guarded`  
 **Baseline:** `0b3caf6fda511e4e2e579ec1ab5b38d5f706a53f`
+**Merged:** PR #17 on `main` — Gate 1 L00 complete; Gate 1 remains open for L01+.
 
 ## Acceptance traceability
 
