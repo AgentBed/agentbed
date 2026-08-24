@@ -1,6 +1,6 @@
 # Goals and user stories
 
-**Revision 5 (2026-08-23)** — kept in step with ADR-001; review history in `review-responses/`.
+**Revision 6 (2026-08-24)** — kept in step with ADR-001; review history in `review-responses/`.
 
 These guide scope decisions. A feature that serves none of them is out of scope. Primary persona: "L-P", a solo operator running Hermes Agent on a home server with several specialised bots, on a private tailnet. Trust model and success criteria per gate: see `threat-model.md` and `roadmap.md`. "Fully operate" always means *within a manifest* — full capability is a grant, not a default.
 
@@ -24,9 +24,9 @@ Each bot can have its own desktop with a browser, persistent profile, snapshot/r
 
 Shared desktops merge their agents into **one trust domain by design**; attribution inside one is best-effort and isolation claims are void. Isolated per-agent desktops are the default.
 
-## G4 — Recurring work becomes skills; needed tools become plugins
+## G4 — Recurring work becomes skills; needed tools become Apps
 
-Any automatable task can be captured as a reusable skill (owned by the agent runtime). Any tool or app the user needs can be built or wrapped as a durable plugin: isolated, reproducible from its manifest, with its own data snapshots, migrations, export and an MCP interface so agents use it as tools rather than clicking through its UI.
+Any automatable task can be captured as a reusable skill (owned by the agent runtime). Any tool the user needs can be built or wrapped as a durable **App**—the user-facing term for an internal `kind: plugin` runtime: isolated, reproducible from its manifest, with its own data snapshots, migrations, export and an MCP interface so agents can use it as tools rather than clicking through its UI. The user describes the outcome in ordinary language; an external agent runtime may clarify and produce a versioned App Brief, but AgentBed independently validates and enforces the resulting capabilities. See [Intent-to-App design](intent-to-app.md).
 
 *Stories:* "I need to track time on this project — build me a time tracker." · "I have no CRM for these leads; build a local one I fully control, or install a good open-source one and connect it."
 
@@ -42,7 +42,7 @@ The owner chooses models freely: cloud APIs, Claude or ChatGPT subscriptions, or
 
 ## G7 — Self-improvement that is safe
 
-Agents may improve the machine they run on (packages, services, config, plugins) through the transaction engine. Self-improvement loops and "dreaming" live in the agent runtimes; Agentbed's contribution is to make self-modification safe: test before apply, probation, automatic rollback, and a ledger.
+Agents may improve the machine they run on (packages, services, config, Apps) through the transaction engine. App changes remain internal plugin transactions. Self-improvement loops and "dreaming" live in the agent runtimes; Agentbed's contribution is to make self-modification safe: test before apply, probation, automatic rollback, and a ledger.
 
 ## G8 — Installs on the Linux you already run
 
@@ -50,7 +50,7 @@ One command on Ubuntu, Fedora or NixOS. The layer updates independently of the O
 
 ## G9 — A community library that cannot hurt you *(later ambition; not scheduled before the manifest format stabilizes)*
 
-Skills and plugins should eventually be shareable through a store. Because plugins run as services with data access, the store launches only with signed packages, pinned versions, manifest summaries shown at install time, and review gates for anything requesting egress or secrets. (OpenClaw's skill-marketplace incidents are the cautionary tale.)
+Skills and Apps should eventually be shareable through a store. Because App packages run as plugin services with data access, the store launches only with signed packages, pinned versions, manifest summaries shown at install time, and review gates for anything requesting egress or secrets. (OpenClaw's skill-marketplace incidents are the cautionary tale.)
 
 ## Non-goals
 

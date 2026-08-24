@@ -1,9 +1,9 @@
 # ADR-001: Agentbed — an AI-native layer for Linux
 
-**Status:** **ACCEPTED WITH CONDITIONS** (reviews codex-003/004/005) — **Revision 6** (2026-08-23), incorporating reviews [codex-001](../review-responses/codex-001.md) through [codex-005](../review-responses/codex-005.md). **Gate 0 closed** ([evidence](../evidence/gate-0.md)), **Gate 1 open**; per-gate conditions in [roadmap.md](../roadmap.md).
-**Date:** 2026-08-22 (rev. 2026-08-23)
+**Status:** **ACCEPTED WITH CONDITIONS** (reviews codex-003/004/005) — **Revision 7** (2026-08-24), incorporating reviews [codex-001](../review-responses/codex-001.md) through [codex-005](../review-responses/codex-005.md) and the accepted Intent-to-App boundary. **Gate 0 closed** ([evidence](../evidence/gate-0.md)), **Gate 1 open**; per-gate conditions in [roadmap.md](../roadmap.md).
+**Date:** 2026-08-22 (rev. 2026-08-24)
 **Deciders:** L-P (owner). Reviewers: Codex (independent), Claude, Hermes "architect" bot.
-**Scope:** Gates 0–3 (NixOS-only alpha). Later gates are sketched, not decided. See [roadmap](../roadmap.md).
+**Scope:** Gates 0–3 (NixOS-only alpha) plus the accepted Gate 4 App/plugin boundary and its gated sequencing. Gate 4's final App Brief/capability schemas remain deferred to the required design spike; Gate 5+ details are sketched, not decided. See [roadmap](../roadmap.md).
 **Normative companions:** [threat-model.md](../threat-model.md) · [effects.md](../effects.md) (effect classes, per-resource safety vector, transaction contract, watchdog)
 
 ---
@@ -295,6 +295,8 @@ Rule: a skill can only *narrow* the agent's capabilities; union is never allowed
 
 ### 6.4 Plugin manifest
 
+**App** is the user-facing product term; **plugin** remains the internal manifest/runtime term. The product promise is “Apps built for you, governed by AgentBed.” A non-technical request is valid input—users never need to name MCP, JSONL, containers, network policy, migrations, backup or rollback. An LLM-backed Designer in an external runtime may clarify the goal and produce a versioned structured App Brief; an external Builder may generate or wrap the implementation. Neither is trusted to grant authority. AgentBed independently validates the proposed manifest, computes capabilities/effects, and governs installation and updates. The conversational contract, safe defaults and gated generator sequence live in [Intent-to-App design](../intent-to-app.md).
+
 ```yaml
 kind: plugin
 version: 1
@@ -318,13 +320,17 @@ capabilities: { ...see 6.1... }        # what the plugin itself may reach
 lifecycle:
   rebuild_from_manifest: true          # must be reproducible
   image_pin: sha256:…                  # digest-pinned; updates are transactions
-  update_policy: manual                # manual | patch-auto
+  update_policy: manual                # patch-auto is future signed-store work, not Gate 4
   backup: nightly
   restore_test: monthly                # restores are exercised, not assumed
   retention: {backups: 90d, on_removal: export_then_archive}
 ```
 
-Compiles to a rootless Podman Quadlet unit (`crm.container`) run by a **dedicated service user per plugin trust domain** (`agentbed-p-crm`, own subuid/subgid range, own Podman storage and runtime directory, `loginctl enable-linger`, managed via `systemctl --user -M agentbed-p-crm@`) — one compromised plugin must not see a sibling's Podman socket, storage or files, so the earlier single shared `agentbed-plugins` user is withdrawn; plugins that explicitly declare mutual trust may share a domain. Plus: a data volume on the plugin subvolume, nftables + egress rules, and a registration of its MCP endpoint with `agentbedd` so agents see `crm.*` tools. Cross-plugin container control and volume-read attempts are Gate 4 exit tests. Quadlet requires Podman ≥ 4.4: supported hosts are Ubuntu 24.04+, Debian 13+, Fedora, NixOS; Ubuntu 22.04 / Debian 12 need the upstream Podman repo. AppArmor (Ubuntu) and SELinux (Fedora) volume labelling is handled by the adapter (`:Z` / profile generation). A plugin can also **wrap** an existing OSS app (Twenty CRM, Kimai, n8n) by pointing `image:` at it and adding an MCP sidecar; the generator should prefer wrapping when a mature app exists.
+Compiles to a rootless Podman Quadlet unit (`crm.container`) run by a **dedicated service user per plugin trust domain** (`agentbed-p-crm`, own subuid/subgid range, own Podman storage and runtime directory, `loginctl enable-linger`, managed via `systemctl --user -M agentbed-p-crm@`) — one compromised plugin must not see a sibling's Podman socket, storage or files, so the earlier single shared `agentbed-plugins` user is withdrawn; plugins that explicitly declare mutual trust may share a domain. Plus: a data volume on the plugin subvolume, nftables + egress rules, and a registration of its MCP endpoint with `agentbedd` so agents see `crm.*` tools. Cross-plugin container control and volume-read attempts are Gate 4 exit tests. Quadlet requires Podman ≥ 4.4: supported hosts are Ubuntu 24.04+, Debian 13+, Fedora, NixOS; Ubuntu 22.04 / Debian 12 need the upstream Podman repo. AppArmor (Ubuntu) and SELinux (Fedora) volume labelling is handled by the adapter (`:Z` / profile generation).
+
+Builders and reviewers remain outside the broker trust boundary. AgentBed treats every generated or wrapped artifact as untrusted and installs it only after the handoff, isolation and reference-contract checks defined in [Intent-to-App design §8](../intent-to-app.md#8-build-and-review-policy). That document is the sole owner of Builder selection order, template responsibilities and review protocol. Generated updates are new governed transactions; generated code cannot edit its own manifest, and any capability widening requires a new explicit proposal and authorization.
+
+Every App install or update operation in Gate 4, including every generated App update, has an explicit `requires_approval` operation policy and uses the independent approval channel; the runtime's conversational **Build it** action is product confirmation, not authorization. The operation carries the versioned App Brief digest and immutable artifact/image digest in its canonical arguments. Before dispatch, the broker independently compiles the manifest, computes its digest and exact effect set, and binds approval to the manifest digest, exact effect set and canonical transaction/operation digest, which covers both argument digests. Any changed brief, build, manifest or effect set requires a fresh review and approval; a schema-valid or semantically valid manifest is never self-authorizing. Automatic signed-store patch policy remains future work outside Gate 4.
 
 ### 6.5 Desktop (disposable computer) spec
 

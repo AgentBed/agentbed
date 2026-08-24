@@ -1,6 +1,6 @@
 # Threat model (v0)
 
-**Status:** Revision 6 · 2026-08-23 · applies to ADR-001 Revision 6
+**Status:** Revision 6 · 2026-08-23 · applies unchanged to ADR-001 Revision 7
 
 ## Persona and deployment assumed
 
