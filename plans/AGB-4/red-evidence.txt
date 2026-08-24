@@ -30,3 +30,24 @@ cargo test -p agentbed-broker --test tx_status_rpc         # 2 passed
 cargo test -p agentbed-broker --test performance_reads     # 1 passed
 cargo test --workspace                                     # PASS (all crates)
 ```
+
+## Repair RED (native review #5010391942 @ `daaaae0`, tests-only)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review
+cargo test -p agentbed-gw --test events_resource
+```
+
+Exit code: 101 — 8 broker repair assertions failed + 1 gateway resource assertion failed (review defects, not compile noise):
+
+```
+post_restart_config_propose_replay_returns_original_without_duplicate_activity — new tx_id after restart
+post_restart_tx_apply_replay_returns_original_without_duplicate_activity — InvalidTransition on replay
+conflicting_idempotency_reuse_fails_closed_after_restart — second body accepted after restart
+orphan_wal_temp_enters_safe_mode_and_refuses_dm — D/M accepted with orphan *.tmp
+checkpoint_seq_mismatch_enters_safe_mode_and_refuses_dm — D/M accepted with bad checkpoint
+corrupt_event_log_enters_safe_mode_and_refuses_dm — D/M accepted with truncated log.jsonl
+concurrent_same_idempotency_key_serializes_to_one_transaction — duplicate tx_ids under race
+event_append_failure_enters_safe_mode_without_exposing_transition — transition committed despite append failure
+mcp_resources_list_includes_agentbed_events — unknown method: resources/list
+```
