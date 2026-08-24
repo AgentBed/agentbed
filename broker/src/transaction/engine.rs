@@ -33,6 +33,7 @@ pub enum EngineError {
     InvalidTransition,
     IdempotencyConflict,
     BaseRevisionMoved,
+    OwnershipMismatch,
     WatchdogAuthorityRequired,
     Storage(DurabilityError),
 }
@@ -157,8 +158,7 @@ impl TransactionEngine {
             return replay_propose(&entry);
         }
 
-        let digest: Digest = serde_json::from_str(&format!("\"{manifest_digest}\""))
-            .unwrap_or_else(|_| Digest::from_sha256_bytes([0; 32]));
+        let digest: Digest = parse_manifest_digest(manifest_digest);
         let base_revision = self.adapter.current_base_revision();
         let tx_id = new_tx_id();
         let diff = params
@@ -215,12 +215,15 @@ impl TransactionEngine {
     pub fn tx_test(
         &self,
         agent_id: &str,
+        manifest_digest: &str,
         params: &TxTestParams,
     ) -> Result<TxStepResult, EngineError> {
         let _guard = self.dm_lock.lock().expect("dm");
         self.ensure_dm_allowed()?;
+        let digest = parse_manifest_digest(manifest_digest);
         self.transition(
             agent_id,
+            &digest,
             params.tx_id.as_str(),
             TransactionState::Testing,
             None,
@@ -233,10 +236,12 @@ impl TransactionEngine {
     pub fn tx_apply(
         &self,
         agent_id: &str,
+        manifest_digest: &str,
         params: &TxApplyParams,
     ) -> Result<TxStepResult, EngineError> {
         let _guard = self.dm_lock.lock().expect("dm");
         self.ensure_dm_allowed()?;
+        let digest = parse_manifest_digest(manifest_digest);
         let key = idem_key(agent_id, "tx.apply", params.idempotency_key.as_str());
         let fingerprint = apply_fingerprint(params);
         if let Some(entry) = self.idempotency.get(&key) {
@@ -249,12 +254,24 @@ impl TransactionEngine {
         let snap = self
             .snapshot(params.tx_id.as_str())
             .ok_or(EngineError::NotFound)?;
+        ensure_owner(&snap, agent_id, &digest)?;
         let current = self.adapter.current_base_revision();
         if snap.base_revision != current {
+            self.transition(
+                &snap.agent_id,
+                &snap.manifest_digest,
+                params.tx_id.as_str(),
+                TransactionState::Rejected,
+                None,
+                None,
+                None,
+                None,
+            )?;
             return Err(EngineError::BaseRevisionMoved);
         }
         self.transition(
             agent_id,
+            &digest,
             params.tx_id.as_str(),
             TransactionState::Applying,
             Some(params.idempotency_key.as_str().to_owned()),
@@ -267,16 +284,19 @@ impl TransactionEngine {
     pub fn advance_to_probation(
         &self,
         agent_id: &str,
+        manifest_digest: &str,
         tx_id: &str,
     ) -> Result<TxStepResult, EngineError> {
         let _guard = self.dm_lock.lock().expect("dm");
         self.ensure_dm_allowed()?;
+        let digest = parse_manifest_digest(manifest_digest);
         let snap = self.snapshot(tx_id).ok_or(EngineError::NotFound)?;
         if snap.state == WireState::Probation {
             return Err(EngineError::WatchdogAuthorityRequired);
         }
         self.transition(
             agent_id,
+            &digest,
             tx_id,
             TransactionState::Probation,
             None,
@@ -338,6 +358,7 @@ impl TransactionEngine {
     fn transition(
         &self,
         agent_id: &str,
+        manifest_digest: &Digest,
         tx_id: &str,
         target: TransactionState,
         idempotency_key: Option<String>,
@@ -346,6 +367,7 @@ impl TransactionEngine {
         idem_store_fingerprint: Option<String>,
     ) -> Result<TxStepResult, EngineError> {
         let snap = self.snapshot(tx_id).ok_or(EngineError::NotFound)?;
+        ensure_owner(&snap, agent_id, manifest_digest)?;
         let from = TransactionState::from(snap.state);
         if !broker_may_enter(from, target) {
             return Err(EngineError::InvalidTransition);
@@ -361,8 +383,8 @@ impl TransactionEngine {
             wire_target,
             idempotency_key,
             idem_fingerprint,
-            agent_id,
-            snap.manifest_digest,
+            &snap.agent_id,
+            snap.manifest_digest.clone(),
             snap.base_revision,
             snap.effect_set,
             snap.diff,
@@ -492,6 +514,22 @@ impl TransactionEngine {
             br#"{"mode":"safe_mode","reason":"durable_divergence"}"#,
         );
     }
+}
+
+fn ensure_owner(
+    snap: &TxSnapshot,
+    agent_id: &str,
+    manifest_digest: &Digest,
+) -> Result<(), EngineError> {
+    if snap.agent_id != agent_id || snap.manifest_digest != *manifest_digest {
+        return Err(EngineError::OwnershipMismatch);
+    }
+    Ok(())
+}
+
+fn parse_manifest_digest(manifest_digest: &str) -> Digest {
+    serde_json::from_str(&format!("\"{manifest_digest}\""))
+        .unwrap_or_else(|_| Digest::from_sha256_bytes([0; 32]))
 }
 
 fn replay_propose(entry: &IdempotencyRecord) -> Result<ConfigProposeOutcome, EngineError> {

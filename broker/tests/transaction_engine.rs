@@ -119,6 +119,7 @@ fn moved_base_revision_refuses_apply() {
     engine
         .tx_test(
             "agent:a",
+            "sha256:abc",
             &TxTestParams {
                 tx_id: tx(&propose.tx_id),
             },
@@ -149,6 +150,7 @@ fn moved_base_revision_refuses_apply() {
     let err = engine
         .tx_apply(
             "agent:a",
+            "sha256:abc",
             &TxApplyParams {
                 tx_id: tx(&propose.tx_id),
                 idempotency_key: idem("apply-1"),
@@ -156,6 +158,8 @@ fn moved_base_revision_refuses_apply() {
         )
         .expect_err("moved base");
     assert!(matches!(err, EngineError::BaseRevisionMoved));
+    let status = engine.tx_status(&propose.tx_id).expect("status");
+    assert_eq!(status.state, TransactionState::Rejected);
 }
 
 #[test]
@@ -181,6 +185,7 @@ fn happy_path_reaches_probation_without_watchdog_states() {
     let testing = engine
         .tx_test(
             "agent:a",
+            "sha256:abc",
             &TxTestParams {
                 tx_id: tx(&propose.tx_id),
             },
@@ -191,6 +196,7 @@ fn happy_path_reaches_probation_without_watchdog_states() {
     let applying = engine
         .tx_apply(
             "agent:a",
+            "sha256:abc",
             &TxApplyParams {
                 tx_id: tx(&propose.tx_id),
                 idempotency_key: idem("apply-2"),
@@ -200,12 +206,12 @@ fn happy_path_reaches_probation_without_watchdog_states() {
     assert_eq!(applying.state, TransactionState::Applying);
 
     let probation = engine
-        .advance_to_probation("agent:a", &propose.tx_id)
+        .advance_to_probation("agent:a", "sha256:abc", &propose.tx_id)
         .expect("probation");
     assert_eq!(probation.state, TransactionState::Probation);
 
     let err = engine
-        .advance_to_probation("agent:a", &propose.tx_id)
+        .advance_to_probation("agent:a", "sha256:abc", &propose.tx_id)
         .expect_err("no watchdog");
     assert!(matches!(err, EngineError::WatchdogAuthorityRequired));
 }
@@ -232,6 +238,7 @@ fn recovery_after_restart_preserves_state_without_invented_progress() {
         engine
             .tx_test(
                 "agent:a",
+                "sha256:abc",
                 &TxTestParams {
                     tx_id: tx(&propose.tx_id),
                 },

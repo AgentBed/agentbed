@@ -57,6 +57,16 @@ cargo test --workspace                                PASS
 | WAL/event corruption not entering safe mode | `WalRecovery`, orphan-tmp detection, checkpoint consistency, `EventLog::validate_integrity` |
 | D/M not serialized | Single `dm_lock` for config propose / tx apply paths |
 | Event append errors discarded | Fail-closed: rollback last WAL transition + safe mode on append failure |
-| No `agentbed://events` MCP resource | Broker `events.replay` (R-class) + gateway `resources/list` / `resources/read` |
+| No `agentbed://events` MCP resource | Broker `events.replay` + gateway `resources/list` / `resources/read` |
 
-Repair tests: `broker/tests/l01_repair_review.rs` (9), `gw/tests/events_resource.rs` (1). See `plans/AGB-4/red-evidence.txt` for RED→GREEN trace.
+## Repair round 2 (review #5010707523 @ `d105e21`)
+
+| Finding | Fix |
+|---|---|
+| Cross-agent transaction re-attribution | `ensure_owner` on every transition; WAL persists original `agent_id`/`manifest_digest` |
+| Moved-base refusal not durable | `tx.apply` records `Rejected` WAL + event before returning `BaseRevisionMoved` |
+| Lexical WAL sort false safe mode | Numeric filename ordering in `WalStore::load_records` |
+| Silent `events.replay` v2 extension | `docs/protocol.md` revision 2 documents operation + cursor format |
+| Raw JSON event cursors | `EventCursor` encodes/decodes base64url per sealed plan |
+
+Repair tests: `broker/tests/l01_repair_review.rs` (13), `gw/tests/events_resource.rs` (1). See `plans/AGB-4/red-evidence.txt` for RED→GREEN trace.

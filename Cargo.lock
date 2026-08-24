@@ -16,6 +16,7 @@ version = "0.0.1"
 dependencies = [
  "agentbed-protocol",
  "agentbed-schemas",
+ "base64",
  "libc",
  "serde",
  "serde_json",

@@ -3,6 +3,7 @@
 #![allow(clippy::expect_used, missing_debug_implementations)]
 
 use crate::storage::durability::{DurabilityError, DurabilityOps, RealDurability};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -23,7 +24,7 @@ pub struct StoredEvent {
     pub payload: String,
 }
 
-/// Client-held replay cursor (opaque JSON string on the wire).
+/// Client-held replay cursor (opaque base64url string on the wire).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CursorBody {
     log_id: String,
@@ -68,12 +69,17 @@ impl EventCursor {
             log_id: self.log_id.clone(),
             seq: self.seq,
         };
-        serde_json::to_string(&body).unwrap_or_default()
+        let json = serde_json::to_string(&body).unwrap_or_default();
+        URL_SAFE_NO_PAD.encode(json.as_bytes())
     }
 
     pub fn parse(encoded: &str) -> Result<Self, EventError> {
+        let json = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| EventError::MalformedCursor)?;
+        let json = String::from_utf8(json).map_err(|_| EventError::MalformedCursor)?;
         let body: CursorBody =
-            serde_json::from_str(encoded).map_err(|_| EventError::MalformedCursor)?;
+            serde_json::from_str(&json).map_err(|_| EventError::MalformedCursor)?;
         Ok(Self {
             log_id: body.log_id,
             seq: body.seq,

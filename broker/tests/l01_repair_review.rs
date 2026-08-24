@@ -68,6 +68,30 @@ fn event_count(state_dir: &Path) -> usize {
         .count()
 }
 
+struct MovedBaseAdapter;
+
+impl agentbed_broker::adapter::HostAdapter for MovedBaseAdapter {
+    fn info(&self) -> agentbed_protocol::dto::system_info::AdapterInfo {
+        UnresolvedAdapter.info()
+    }
+
+    fn safety_vector(&self) -> agentbed_protocol::dto::system_info::SafetyVector {
+        UnresolvedAdapter.safety_vector()
+    }
+
+    fn safety_source(&self) -> agentbed_protocol::dto::system_info::SafetySource {
+        UnresolvedAdapter.safety_source()
+    }
+
+    fn current_base_revision(&self) -> BaseRevision {
+        BaseRevision {
+            generation: Some("gen-moved".to_owned()),
+            etc_git_commit: "deadbeef".to_owned(),
+            config_digest: Digest::from_sha256_bytes([0x33; 32]),
+        }
+    }
+}
+
 #[test]
 fn post_restart_config_propose_replay_returns_original_without_duplicate_activity() {
     let dir = scratch();
@@ -102,6 +126,7 @@ fn post_restart_tx_apply_replay_returns_original_without_duplicate_activity() {
         engine
             .tx_test(
                 "agent:a",
+                "sha256:abc",
                 &TxTestParams {
                     tx_id: tx(&proposed.tx_id),
                 },
@@ -110,6 +135,7 @@ fn post_restart_tx_apply_replay_returns_original_without_duplicate_activity() {
         engine
             .tx_apply(
                 "agent:a",
+                "sha256:abc",
                 &TxApplyParams {
                     tx_id: tx(&proposed.tx_id),
                     idempotency_key: apply_key.clone(),
@@ -123,6 +149,7 @@ fn post_restart_tx_apply_replay_returns_original_without_duplicate_activity() {
     let replay = engine
         .tx_apply(
             "agent:a",
+            "sha256:abc",
             &TxApplyParams {
                 tx_id: tx(&tx_id),
                 idempotency_key: apply_key,
@@ -394,26 +421,6 @@ fn moved_base_refusal_is_recorded_and_survives_restart() {
         propose
     };
 
-    struct MovedBaseAdapter;
-    impl agentbed_broker::adapter::HostAdapter for MovedBaseAdapter {
-        fn info(&self) -> agentbed_protocol::dto::system_info::AdapterInfo {
-            UnresolvedAdapter.info()
-        }
-        fn safety_vector(&self) -> agentbed_protocol::dto::system_info::SafetyVector {
-            UnresolvedAdapter.safety_vector()
-        }
-        fn safety_source(&self) -> agentbed_protocol::dto::system_info::SafetySource {
-            UnresolvedAdapter.safety_source()
-        }
-        fn current_base_revision(&self) -> BaseRevision {
-            BaseRevision {
-                generation: Some("gen-moved".to_owned()),
-                etc_git_commit: "deadbeef".to_owned(),
-                config_digest: Digest::from_sha256_bytes([0x33; 32]),
-            }
-        }
-    }
-
     let wal_before = wal_record_count(&dir);
     let engine = TransactionEngine::open(&dir, MovedBaseAdapter).expect("reopen");
     let err = engine
@@ -445,7 +452,7 @@ fn wal_recovery_with_ten_plus_records_stays_operational() {
             store
                 .append_transition(&WalRecord {
                     seq,
-                    tx_id: format!("01ARZ3NDEKTSV4RRFFQ{:07X}", seq),
+                    tx_id: format!("01ARZ3NDEKTSV4RRFFQ{seq:07X}"),
                     state: TransactionState::Proposed,
                     idempotency_key: Some(format!("k-{seq}")),
                     idem_fingerprint: None,

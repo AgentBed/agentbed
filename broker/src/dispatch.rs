@@ -328,8 +328,12 @@ impl Dispatcher {
                 serde_json::from_value::<TxTestParams>(params.clone())
                     .map_err(|_| "params_rejected")
             },
-            |_manifest_digest, params| {
-                let step = self.transactions.tx_test(agent.agent_id(), params)?;
+            |manifest_digest, params| {
+                let step = self.transactions.tx_test(
+                    agent.agent_id(),
+                    &manifest_digest.to_string(),
+                    params,
+                )?;
                 Ok(OperationResult::TxTest(Box::new(step)))
             },
         )
@@ -356,8 +360,12 @@ impl Dispatcher {
                 serde_json::from_value::<TxApplyParams>(params.clone())
                     .map_err(|_| "params_rejected")
             },
-            |_manifest_digest, params| {
-                let step = self.transactions.tx_apply(agent.agent_id(), params)?;
+            |manifest_digest, params| {
+                let step = self.transactions.tx_apply(
+                    agent.agent_id(),
+                    &manifest_digest.to_string(),
+                    params,
+                )?;
                 Ok(OperationResult::TxApply(Box::new(step)))
             },
         )
@@ -550,7 +558,8 @@ impl Dispatcher {
         let (code, stage, reason) = match err {
             EngineError::NotFound
             | EngineError::BaseRevisionMoved
-            | EngineError::IdempotencyConflict => (
+            | EngineError::IdempotencyConflict
+            | EngineError::OwnershipMismatch => (
                 ErrorCode::Denied,
                 DecisionStage::OperationPolicy,
                 "transaction_refused",

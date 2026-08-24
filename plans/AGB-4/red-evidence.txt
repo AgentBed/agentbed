@@ -78,3 +78,14 @@ event_cursor_encodes_as_opaque_base64url — base64url encode not implemented
 wal_recovery_with_ten_plus_records_stays_operational — lexical WAL sort false safe mode
 moved_base_refusal_is_recorded_and_survives_restart — durable rejection not persisted
 ```
+
+## Repair GREEN round 2 (implementation commit on branch `agent/agb-4/l01-durable-transaction-core`)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review   # 13 passed
+cargo test -p agentbed-gw --test events_resource         # 1 passed
+cargo fmt --all -- --check                               # PASS
+cargo clippy --workspace --all-targets -- -D warnings    # PASS
+cargo build --workspace --all-targets                    # PASS
+cargo test --workspace                                   # PASS
+```

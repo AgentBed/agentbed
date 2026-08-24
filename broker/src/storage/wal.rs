@@ -135,7 +135,7 @@ impl WalStore {
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
             .collect();
-        paths.sort();
+        paths.sort_by_key(|path| wal_record_seq(path).unwrap_or(u64::MAX));
         for path in paths {
             let text = std::fs::read_to_string(&path).map_err(|_| DurabilityError::Io)?;
             let record: WalRecord =
@@ -190,6 +190,10 @@ impl WalStore {
         self.checkpoint_seq = prev;
         Ok(())
     }
+}
+
+fn wal_record_seq(path: &Path) -> Option<u64> {
+    path.file_stem()?.to_str()?.parse().ok()
 }
 
 fn has_ambiguous_temp_files(records_dir: &Path) -> bool {
