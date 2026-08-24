@@ -12,6 +12,7 @@ use crate::events::{EventCursor, EventLog, EventRecord};
 use crate::storage::durability::{DurabilityError, RealDurability};
 use crate::storage::idempotency::{IdempotencyRecord, IdempotencyStore};
 use crate::storage::wal::{WalRecord, WalStore};
+use crate::transaction::recovery;
 use crate::transaction::state::{broker_may_enter, TransactionState, WireState};
 use agentbed_protocol::digest::Digest;
 use agentbed_protocol::dto::transaction::{
@@ -109,23 +110,16 @@ impl TransactionEngine {
 
         let mut txs = HashMap::new();
         let mut next_seq = 0_u64;
+        if !safe_mode && !recovery::validate_wal_semantics(&recovery.records) {
+            safe_mode = true;
+        }
         if !safe_mode {
             let mut latest_by_tx: HashMap<TxId, &WalRecord> = HashMap::new();
             for record in &recovery.records {
-                if let Some(prev) = latest_by_tx.get(&record.tx_id) {
-                    if record.seq <= prev.seq {
-                        safe_mode = true;
-                        txs.clear();
-                        break;
-                    }
-                    if record.state == prev.state && record.state == WireState::Proposed {
-                        safe_mode = true;
-                        txs.clear();
-                        break;
-                    }
-                }
                 latest_by_tx.insert(record.tx_id.clone(), record);
                 next_seq = next_seq.max(record.seq);
+            }
+            for record in latest_by_tx.values() {
                 txs.insert(
                     record.tx_id.clone(),
                     TxSnapshot {
@@ -171,6 +165,14 @@ impl TransactionEngine {
             }
             return replay_propose(&entry);
         }
+        if let Some(entry) = self.find_propose_idempotency_from_wal(&key, &fingerprint) {
+            let outcome = replay_propose(&entry)?;
+            if self.idempotency.get(&key).is_none() {
+                self.record_idempotency(entry)?;
+                self.append_state_event(&outcome.tx_id, WireState::Proposed)?;
+            }
+            return Ok(outcome);
+        }
 
         let digest: Digest = parse_manifest_digest(manifest_digest);
         let base_revision = self.adapter.current_base_revision();
@@ -206,16 +208,18 @@ impl TransactionEngine {
             affected_resources.clone(),
             Some(result_json.clone()),
         )?;
+        let idem_record = IdempotencyRecord {
+            key: key.clone(),
+            tx_id: tx_id.clone(),
+            fingerprint: fingerprint.clone(),
+            result_json: result_json.clone(),
+        };
+        self.record_idempotency(idem_record)?;
         if let Err(err) = self.append_state_event(&tx_id, WireState::Proposed) {
             self.rollback_transition(&tx_id, seq)?;
+            let _ = self.idempotency.remove(&key);
             return Err(err);
         }
-        self.record_idempotency(IdempotencyRecord {
-            key,
-            tx_id: tx_id.clone(),
-            fingerprint,
-            result_json,
-        })?;
         Ok(ConfigProposeOutcome {
             tx_id,
             diff,
@@ -302,7 +306,7 @@ impl TransactionEngine {
             Some(params.idempotency_key.as_str().to_owned()),
             Some(fingerprint.clone()),
             Some(key),
-            Some(fingerprint),
+            Some(fingerprint.as_str()),
         )
     }
 
@@ -389,7 +393,7 @@ impl TransactionEngine {
         idempotency_key: Option<String>,
         idem_fingerprint: Option<String>,
         idem_store_key: Option<String>,
-        idem_store_fingerprint: Option<String>,
+        idem_store_fingerprint: Option<&str>,
     ) -> Result<TxStepResult, EngineError> {
         let snap = self.snapshot(tx_id).ok_or(EngineError::NotFound)?;
         ensure_owner(&snap, agent_id, manifest_digest)?;
@@ -416,17 +420,24 @@ impl TransactionEngine {
             snap.affected_resources,
             Some(result_json.clone()),
         )?;
+        if let (Some(key), Some(fingerprint)) = (idem_store_key.clone(), idem_store_fingerprint) {
+            let idem_record = IdempotencyRecord {
+                key: key.clone(),
+                tx_id: tx_id.to_owned(),
+                fingerprint: fingerprint.to_owned(),
+                result_json: result_json.clone(),
+            };
+            if let Err(err) = self.record_idempotency(idem_record) {
+                self.rollback_transition(tx_id, seq)?;
+                return Err(err);
+            }
+        }
         if let Err(err) = self.append_state_event(tx_id, wire_target) {
             self.rollback_transition(tx_id, seq)?;
+            if let Some(key) = idem_store_key {
+                let _ = self.idempotency.remove(&key);
+            }
             return Err(err);
-        }
-        if let (Some(key), Some(fingerprint)) = (idem_store_key, idem_store_fingerprint) {
-            self.record_idempotency(IdempotencyRecord {
-                key,
-                tx_id: tx_id.to_owned(),
-                fingerprint,
-                result_json,
-            })?;
         }
         Ok(result)
     }
@@ -454,6 +465,7 @@ impl TransactionEngine {
             *next
         };
         let record = WalRecord {
+            record_version: 1,
             seq,
             tx_id: tx_id.to_owned(),
             state,
@@ -518,6 +530,38 @@ impl TransactionEngine {
         self.idempotency
             .insert(record)
             .map_err(EngineError::Storage)
+    }
+
+    fn find_propose_idempotency_from_wal(
+        &self,
+        key: &str,
+        fingerprint: &str,
+    ) -> Option<IdempotencyRecord> {
+        let records = self.wal.lock().expect("wal").load_records().ok()?;
+        for record in records.iter().rev() {
+            if record.state != WireState::Proposed {
+                continue;
+            }
+            let Some(idem) = record.idempotency_key.as_ref() else {
+                continue;
+            };
+            let binding = idem_key(&record.agent_id, "config.propose", idem);
+            if binding != key {
+                continue;
+            }
+            let stored_fp = record.idem_fingerprint.as_deref().unwrap_or("");
+            if stored_fp != fingerprint {
+                return None;
+            }
+            let result_json = record.result_json.as_ref()?;
+            return Some(IdempotencyRecord {
+                key: key.to_owned(),
+                tx_id: record.tx_id.clone(),
+                fingerprint: fingerprint.to_owned(),
+                result_json: result_json.clone(),
+            });
+        }
+        None
     }
 
     fn snapshot(&self, tx_id: &str) -> Option<TxSnapshot> {

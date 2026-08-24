@@ -13,6 +13,8 @@ use std::sync::Arc;
 /// One durable WAL record written before a visible state entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalRecord {
+    #[serde(default = "default_record_version")]
+    pub record_version: u32,
     pub seq: u64,
     pub tx_id: String,
     pub state: TransactionState,
@@ -27,6 +29,10 @@ pub struct WalRecord {
     pub affected_resources: Vec<String>,
     pub approval_ref: Option<String>,
     pub result_json: Option<String>,
+}
+
+fn default_record_version() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

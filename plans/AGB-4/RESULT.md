@@ -80,3 +80,14 @@ Repair tests: `broker/tests/l01_repair_review.rs` (13), `gw/tests/events_resourc
 | Moved-base apply not idempotently replayable | `replay_apply` + idempotency record on moved-base `Rejected` refusal |
 
 Repair tests: `broker/tests/l01_repair_review.rs` (19), `gw/tests/events_resource.rs` (1).
+
+## Repair round 4 (native review #5011209070 @ `89b848e`)
+
+| Finding | Fix |
+| --- | --- |
+| Recovery accepts watchdog-owned / impossible WAL chains and immutable-field drift | `broker/src/transaction/recovery.rs` validates `record_version`, watchdog states, `broker_may_enter`, and identity/base-revision immutability before rebuilding `txs` |
+| Unsupported explicit `record_version` ignored | `WalRecord.record_version` (default 1); reject `!= 1` during recovery |
+| Idempotency index failure after WAL visibility allows duplicate retry | Reorder `config.propose` / `transition` to WAL → idempotency → event; WAL replay on same-key retry; complete partial bindings on replay |
+| Idempotency write/rename fault injection | Filesystem chmod / rename-blocker tests in `l01_repair_review.rs` |
+
+Repair tests: `broker/tests/l01_repair_review.rs` (32).

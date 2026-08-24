@@ -68,6 +68,16 @@ impl IdempotencyStore {
         Ok(())
     }
 
+    pub fn remove(&self, key: &str) -> Result<(), DurabilityError> {
+        let filename = format!("{:016x}.json", hash_key(key));
+        let path = self.root.join(filename);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|_| DurabilityError::Io)?;
+        }
+        self.entries.lock().expect("idem").remove(key);
+        Ok(())
+    }
+
     pub fn merge_from_wal(&self, records: &[WalRecord]) {
         let mut map = self.entries.lock().expect("idem");
         for record in records {

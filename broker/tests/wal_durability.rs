@@ -25,6 +25,7 @@ fn scratch() -> PathBuf {
 
 fn sample_record(seq: u64, state: TransactionState) -> WalRecord {
     WalRecord {
+        record_version: 1,
         seq,
         tx_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
         state,

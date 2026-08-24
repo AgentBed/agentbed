@@ -225,6 +225,7 @@ fn checkpoint_seq_mismatch_enters_safe_mode_and_refuses_dm() {
         let mut store = WalStore::open(&wal_dir, durability).expect("wal");
         store
             .append_transition(&WalRecord {
+                record_version: 1,
                 seq: 1,
                 tx_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
                 state: TransactionState::Proposed,
@@ -451,6 +452,7 @@ fn wal_recovery_with_ten_plus_records_stays_operational() {
         for seq in 1..=12 {
             store
                 .append_transition(&WalRecord {
+                    record_version: 1,
                     seq,
                     tx_id: format!("01ARZ3NDEKTSV4RRFFQ{seq:07X}"),
                     state: TransactionState::Proposed,
@@ -565,6 +567,7 @@ fn duplicate_tx_id_in_wal_enters_safe_mode() {
         for seq in 1..=2 {
             store
                 .append_transition(&WalRecord {
+                    record_version: 1,
                     seq,
                     tx_id: shared_tx.to_owned(),
                     state: TransactionState::Proposed,
@@ -694,6 +697,7 @@ fn wal_record(
     manifest_byte: u8,
 ) -> WalRecord {
     WalRecord {
+        record_version: 1,
         seq,
         tx_id: tx_id.to_owned(),
         state,
@@ -741,7 +745,7 @@ fn append_wal_records(dir: &Path, records: &[WalRecord]) {
     }
 }
 
-fn write_wal_json_record(dir: &Path, seq: u64, value: serde_json::Value) {
+fn write_wal_json_record(dir: &Path, seq: u64, value: &serde_json::Value) {
     let wal_dir = dir.join("wal");
     std::fs::create_dir_all(wal_dir.join("records")).expect("records");
     std::fs::write(
@@ -759,12 +763,12 @@ fn write_wal_json_record(dir: &Path, seq: u64, value: serde_json::Value) {
 fn write_mutated_wal_record(
     dir: &Path,
     seq: u64,
-    record: WalRecord,
+    record: &WalRecord,
     mutate: impl FnOnce(&mut serde_json::Value),
 ) {
-    let mut value = wal_record_to_json(&record);
+    let mut value = wal_record_to_json(record);
     mutate(&mut value);
-    write_wal_json_record(dir, seq, value);
+    write_wal_json_record(dir, seq, &value);
 }
 
 fn assert_dm_refused_in_safe_mode(dir: &Path) {
@@ -904,7 +908,7 @@ fn unsupported_wal_record_version_enters_safe_mode() {
         "agent:a",
         0,
     );
-    write_mutated_wal_record(&dir, 1, record, |value| {
+    write_mutated_wal_record(&dir, 1, &record, |value| {
         value
             .as_object_mut()
             .expect("object")
@@ -923,11 +927,8 @@ fn wal_record_missing_required_field_enters_safe_mode() {
         "agent:a",
         0,
     );
-    write_mutated_wal_record(&dir, 1, record, |value| {
-        value
-            .as_object_mut()
-            .expect("object")
-            .remove("agent_id");
+    write_mutated_wal_record(&dir, 1, &record, |value| {
+        value.as_object_mut().expect("object").remove("agent_id");
     });
     assert_dm_refused_in_safe_mode(&dir);
 }
@@ -942,7 +943,7 @@ fn wal_record_invalid_required_field_enters_safe_mode() {
         "agent:a",
         0,
     );
-    write_mutated_wal_record(&dir, 1, record, |value| {
+    write_mutated_wal_record(&dir, 1, &record, |value| {
         value["state"] = serde_json::json!("not_a_real_state");
     });
     assert_dm_refused_in_safe_mode(&dir);
@@ -964,7 +965,7 @@ fn idempotency_index_write_failure_immediate_retry_does_not_duplicate() {
     set_path_readonly(&idem_dir, false);
 
     assert_eq!(wal_record_count(&dir), 1);
-    assert_eq!(event_count(&dir), 1);
+    assert_eq!(event_count(&dir), 0);
 
     let durability = Arc::new(RealDurability);
     let store = WalStore::open(dir.join("wal"), durability).expect("wal");
@@ -1016,7 +1017,7 @@ fn idempotency_index_rename_failure_immediate_retry_does_not_duplicate() {
         .expect_err("rename failure");
     assert!(matches!(err, EngineError::Storage(_)));
     assert_eq!(wal_record_count(&dir), 1);
-    assert_eq!(event_count(&dir), 1);
+    assert_eq!(event_count(&dir), 0);
 
     std::fs::remove_dir_all(&blocker).expect("clear blocker");
     let durability = Arc::new(RealDurability);
