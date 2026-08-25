@@ -17,5 +17,6 @@ pub fn dependencies_from(bundle: &FakeBundle) -> Dependencies {
         Arc::clone(&bundle.invariants),
         Arc::clone(&bundle.base_revision),
         Arc::clone(&bundle.peer_cred),
+        Arc::clone(&bundle.peer_cred),
     )
 }

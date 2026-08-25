@@ -46,6 +46,7 @@ impl DecisionLogReader {
         let mut bytes = Vec::new();
         File::open(path)?.read_to_end(&mut bytes)?;
         let mut records = Vec::new();
+        let mut last_epoch = 0_u64;
         let mut offset = 0usize;
         while offset < bytes.len() {
             let remaining = bytes
@@ -77,6 +78,10 @@ impl DecisionLogReader {
             if record.sequence != expected {
                 return Err(invalid_log("non-monotonic decision sequence"));
             }
+            if record.epoch < last_epoch {
+                return Err(invalid_log("decreasing epoch"));
+            }
+            last_epoch = record.epoch;
             records.push(record);
             offset = offset
                 .checked_add(record_end)
@@ -133,29 +138,27 @@ pub(crate) fn append_record(
         .parent()
         .ok_or_else(|| DurabilityError::Io("decision log has no parent".to_owned()))?;
     std::fs::create_dir_all(parent).map_err(io_durability)?;
+
+    let mut file = open_append_no_follow(path).map_err(io_durability)?;
+    file.write_all(&frame).map_err(io_durability)?;
     durability.file_fsync(path)?;
     durability.dir_fsync(parent)?;
-
-    let original_len = std::fs::metadata(path).map_or(0, |metadata| metadata.len());
-    let append_result = (|| {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(io_durability)?;
-        file.write_all(&frame).map_err(io_durability)?;
-        file.sync_all().map_err(io_durability)?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(io_durability)
-    })();
-    if let Err(error) = append_result {
-        if let Ok(file) = OpenOptions::new().write(true).open(path) {
-            let _ = file.set_len(original_len);
-        }
-        return Err(error);
-    }
     Ok(())
+}
+
+#[cfg(unix)]
+fn open_append_no_follow(path: &Path) -> Result<File, Error> {
+    use std::os::unix::fs::OpenOptionsExt;
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_append_no_follow(path: &Path) -> Result<File, Error> {
+    OpenOptions::new().create(true).append(true).open(path)
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, Error> {

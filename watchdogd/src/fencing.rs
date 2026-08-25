@@ -1,18 +1,22 @@
 //! Production process-group fencing with bounded termination and reap checks.
 
 use crate::error::FenceError;
+use crate::interfaces::{FenceStage, ProcessGroupFence, SignalKind};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const TERM_GRACE_MAX: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Default)]
-pub struct ProductionProcessGroupFencer;
+pub struct ProductionProcessGroupFencer {
+    last_pgid: Mutex<Option<i32>>,
+}
 
 impl ProductionProcessGroupFencer {
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
     pub fn fence_group(&self, process_group: i32, timeout: Duration) -> Result<(), FenceError> {
@@ -27,6 +31,49 @@ impl ProductionProcessGroupFencer {
         }
         reap_group_children(process_group);
         if group_alive(process_group) {
+            return Err(FenceError::Incomplete);
+        }
+        Ok(())
+    }
+}
+
+impl ProcessGroupFence for ProductionProcessGroupFencer {
+    fn signal(&self, kind: SignalKind, pgid: i32) -> Result<(), FenceError> {
+        *self
+            .last_pgid
+            .lock()
+            .map_err(|_| FenceError::SignalFailed)? = Some(pgid);
+        match kind {
+            SignalKind::Term => signal_group(pgid, libc::SIGTERM),
+            SignalKind::Kill => signal_group(pgid, libc::SIGKILL),
+        }
+    }
+
+    fn group_alive(&self, _stage: FenceStage) -> bool {
+        let pgid = self
+            .last_pgid
+            .lock()
+            .ok()
+            .and_then(|guard| *guard)
+            .unwrap_or(0);
+        if pgid <= 0 {
+            return false;
+        }
+        group_alive(pgid)
+    }
+
+    fn bounded_wait(&self, timeout: Duration) -> Result<(), FenceError> {
+        let pgid = self
+            .last_pgid
+            .lock()
+            .ok()
+            .and_then(|guard| *guard)
+            .unwrap_or(0);
+        if pgid <= 0 {
+            return Err(FenceError::Incomplete);
+        }
+        wait_until_absent(pgid, timeout);
+        if group_alive(pgid) {
             return Err(FenceError::Incomplete);
         }
         Ok(())

@@ -1,14 +1,13 @@
 //! Session binding and authenticated envelope verification.
 
 use crate::error::RpcError;
-use crate::interfaces::{Entropy, PeerCredSource};
+use crate::interfaces::{Entropy, PeerCred, PeerCredSource};
 use crate::rpc::protocol::{SessionBind, SessionEstablished};
 
 #[derive(Debug, Clone)]
 pub struct SessionState {
     pub(crate) established: Option<SessionEstablished>,
     pub(crate) last_counter: u64,
-    #[allow(dead_code)]
     pub(crate) bound: Option<BoundSession>,
 }
 
@@ -32,12 +31,32 @@ impl SessionState {
         entropy: &dyn Entropy,
         bind: SessionBind,
     ) -> Result<(Self, SessionEstablished, Option<BoundSession>), RpcError> {
-        if safe_mode {
-            return Err(RpcError::SafeModeActive);
-        }
         let cred = peer_cred
             .peer_credentials()
             .map_err(|_| RpcError::WrongPeer)?;
+        Self::try_bind_with_cred(
+            broker_uid,
+            broker_gid,
+            safe_mode,
+            durable_binding,
+            &cred,
+            entropy,
+            bind,
+        )
+    }
+
+    pub(crate) fn try_bind_with_cred(
+        broker_uid: u32,
+        broker_gid: u32,
+        safe_mode: bool,
+        durable_binding: &Option<BoundSession>,
+        cred: &PeerCred,
+        entropy: &dyn Entropy,
+        bind: SessionBind,
+    ) -> Result<(Self, SessionEstablished, Option<BoundSession>), RpcError> {
+        if safe_mode {
+            return Err(RpcError::SafeModeActive);
+        }
         if cred.uid != broker_uid || cred.gid != broker_gid {
             return Err(RpcError::WrongPeer);
         }
@@ -51,8 +70,7 @@ impl SessionState {
                 return Err(RpcError::StaleReconnect);
             }
         }
-        let mut capability = vec![0u8; 32];
-        entropy.fill(&mut capability);
+        let capability = derive_capability(entropy, cred);
         let established = SessionEstablished {
             capability,
             server_nonce: format!("srv-{}", bind.client_nonce),
@@ -76,7 +94,6 @@ impl SessionState {
         Ok((state, established, Some(bound)))
     }
 
-    #[allow(dead_code)]
     pub(crate) fn bound(&self) -> Option<&BoundSession> {
         self.bound.as_ref()
     }
@@ -118,4 +135,19 @@ impl SessionState {
     pub(crate) fn advance_counter(&mut self, counter: u64) {
         self.last_counter = counter;
     }
+}
+
+fn derive_capability(entropy: &dyn Entropy, cred: &PeerCred) -> Vec<u8> {
+    let mut capability = vec![0u8; 32];
+    entropy.fill(&mut capability);
+    for (index, byte) in cred.pid.to_ne_bytes().into_iter().enumerate() {
+        capability[index] ^= byte;
+    }
+    for (index, byte) in cred.uid.to_ne_bytes().into_iter().enumerate() {
+        capability[8 + index] ^= byte;
+    }
+    for (index, byte) in cred.gid.to_ne_bytes().into_iter().enumerate() {
+        capability[16 + index] ^= byte;
+    }
+    capability
 }

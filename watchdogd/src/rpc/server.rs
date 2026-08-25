@@ -11,11 +11,13 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
+use std::time::Duration;
+
+const SOCKET_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub struct RpcServer {
     listener: UnixListener,
-    #[allow(dead_code)]
     socket_path: std::path::PathBuf,
 }
 
@@ -43,10 +45,21 @@ impl RpcServer {
             .listener
             .accept()
             .map_err(|_| RpcError::MalformedFrame)?;
+        stream
+            .set_read_timeout(Some(SOCKET_IO_TIMEOUT))
+            .map_err(|_| RpcError::MalformedFrame)?;
+        stream
+            .set_write_timeout(Some(SOCKET_IO_TIMEOUT))
+            .map_err(|_| RpcError::MalformedFrame)?;
         let bind_frame = read_frame(&mut stream)?;
         let bind = decode_session_bind(&bind_frame)?;
+        let cred = core
+            .deps
+            .stream_peer
+            .peer_credentials_for_stream(&stream)
+            .map_err(|_| RpcError::WrongPeer)?;
         let (mut session, established) =
-            SessionState::bind(core, &*core.deps.peer_cred, &*core.deps.entropy, bind)?;
+            SessionState::bind_with_stream_cred(core, &cred, &*core.deps.entropy, bind)?;
         let est_frame = encode_session_established(&established)?;
         stream
             .write_all(&est_frame)

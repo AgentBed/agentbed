@@ -73,6 +73,13 @@ pub trait PeerCredSource: std::fmt::Debug + Send + Sync {
     fn peer_credentials(&self) -> Result<PeerCred, PeerCredError>;
 }
 
+pub trait StreamPeerAuth: std::fmt::Debug + Send + Sync {
+    fn peer_credentials_for_stream(
+        &self,
+        stream: &std::os::unix::net::UnixStream,
+    ) -> Result<PeerCred, PeerCredError>;
+}
+
 impl<T> Entropy for Arc<T>
 where
     T: Entropy + ?Sized,
@@ -103,11 +110,12 @@ pub struct Dependencies {
     pub invariants: Arc<dyn InvariantObserver>,
     pub base_revision: Arc<dyn BaseRevisionObserver>,
     pub peer_cred: Arc<dyn PeerCredSource>,
+    pub stream_peer: Arc<dyn StreamPeerAuth>,
 }
 
 impl Dependencies {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<C, E, T, D, P, J, F, I, B, R>(
+    pub fn new<C, E, T, D, P, J, F, I, B, R, S>(
         clock: Arc<C>,
         entropy: Arc<E>,
         topology: Arc<T>,
@@ -118,6 +126,7 @@ impl Dependencies {
         invariants: Arc<I>,
         base_revision: Arc<B>,
         peer_cred: Arc<R>,
+        stream_peer: Arc<S>,
     ) -> Self
     where
         C: Clock + 'static,
@@ -130,6 +139,7 @@ impl Dependencies {
         I: InvariantObserver + 'static,
         B: BaseRevisionObserver + 'static,
         R: PeerCredSource + 'static,
+        S: StreamPeerAuth + 'static,
     {
         Self {
             clock,
@@ -142,6 +152,7 @@ impl Dependencies {
             invariants,
             base_revision,
             peer_cred,
+            stream_peer,
         }
     }
 }

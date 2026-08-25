@@ -8,10 +8,11 @@ use agentbed_watchdogd::error::{
 use agentbed_watchdogd::interfaces::{
     BaseRevisionObserver, Clock, Durability, Entropy, ExternalFloorReader, InvariantObserver,
     InvariantOutcome, JobInspector, PeerCred, PeerCredSource, ProcessGroupFence, SignalKind,
-    TopologyProbe,
+    StreamPeerAuth, TopologyProbe,
 };
 use agentbed_watchdogd::read_model::{AuthorityRecordKind, DecisionLogReader};
 use std::collections::VecDeque;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -367,6 +368,15 @@ impl PeerCredSource for FakePeerCred {
             .expect("lock")
             .pop_front()
             .ok_or(agentbed_watchdogd::error::PeerCredError::Unavailable)
+    }
+}
+
+impl StreamPeerAuth for FakePeerCred {
+    fn peer_credentials_for_stream(
+        &self,
+        _stream: &UnixStream,
+    ) -> Result<PeerCred, agentbed_watchdogd::error::PeerCredError> {
+        PeerCredSource::peer_credentials(self)
     }
 }
 
