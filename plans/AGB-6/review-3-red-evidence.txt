@@ -1,0 +1,81 @@
+command: cargo test -p agentbed-adapter-nix --test l02_review_repair_3
+exit_code: 101
+baseline: 0a763d3b8e866da556ed625bc8cf2e2ae4b6bed8
+review: 5019192819
+
+   Compiling agentbed-adapter-nix v0.0.1 (/home/lpbaril/multica_workspaces/19516347-f19e-44b5-a3d4-77a551fa4fb4/b35ed7ece21a/workdir/agentbed/adapters/nix)
+error[E0432]: unresolved imports `agentbed_adapter_nix::capture::FailSyncOn`, `agentbed_adapter_nix::capture::PathSync`, `agentbed_adapter_nix::capture::StdPathSync`
+ --> adapters/nix/tests/l02_review_repair_3.rs:9:51
+  |
+9 | use agentbed_adapter_nix::capture::{CaptureStore, FailSyncOn, PathSync, StdPathSync};
+  |                                                   ^^^^^^^^^^  ^^^^^^^^  ^^^^^^^^^^^ no `StdPathSync` in `capture`
+  |                                                   |           |
+  |                                                   |           no `PathSync` in `capture`
+  |                                                   no `FailSyncOn` in `capture`
+
+error[E0599]: no variant, associated function, or constant named `DynamicExpression` found for enum `ProtectedRejectReason` in the current scope
+  --> adapters/nix/tests/l02_review_repair_3.rs:99:44
+   |
+99 |     assert_eq!(err, ProtectedRejectReason::DynamicExpression);
+   |                                            ^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `ProtectedRejectReason`
+
+error[E0599]: no associated function or constant named `with_syncer` found for struct `CaptureStore` in the current scope
+   --> adapters/nix/tests/l02_review_repair_3.rs:125:31
+    |
+125 |     let store = CaptureStore::with_syncer(
+    |                               ^^^^^^^^^^^ associated function or constant not found in `CaptureStore`
+
+error[E0599]: no variant, associated function, or constant named `ReservationNotDurable` found for enum `PromotionError` in the current scope
+   --> adapters/nix/tests/l02_review_repair_3.rs:138:37
+    |
+138 |     assert_eq!(err, PromotionError::ReservationNotDurable);
+    |                                     ^^^^^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `PromotionError`
+
+error[E0308]: mismatched types
+   --> adapters/nix/tests/l02_review_repair_3.rs:153:60
+    |
+153 |     let err = profile::advance_profile(&runner, &proposal, &store).expect_err("no pin");
+    |               ------------------------                     ^^^^^^ expected `&str`, found `&CaptureStore`
+
+error[E0599]: no variant, associated function, or constant named `PinRequired` found for enum `PromotionError` in the current scope
+   --> adapters/nix/tests/l02_review_repair_3.rs:154:37
+    |
+154 |     assert_eq!(err, PromotionError::PinRequired);
+    |                                     ^^^^^^^^^^^ variant, associated function, or constant not found in `PromotionError`
+
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> adapters/nix/tests/l02_review_repair_3.rs:168:5
+    |
+168 |     pin::pin_closure(&runner, &pinned_capture, &store).expect("pin");
+
+error[E0308]: mismatched types
+   --> adapters/nix/tests/l02_review_repair_3.rs:170:59
+    |
+170 |         profile::advance_profile(&runner, &other_capture, &store).expect_err("bypass");
+
+error[E0599]: no variant named `PinMismatch` found for enum `PromotionError`
+   --> adapters/nix/tests/l02_review_repair_3.rs:171:43
+    |
+171 |     assert!(matches!(err, PromotionError::PinMismatch { .. }));
+
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> adapters/nix/tests/l02_review_repair_3.rs:179:15
+    |
+179 |     let err = boot::configure_boot(&runner, &proposal, &store).expect_err("no pin");
+
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> adapters/nix/tests/l02_review_repair_3.rs:194:5
+    |
+194 |     pin::pin_closure(&runner, &proposal, &store).expect("pin");
+
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> adapters/nix/tests/l02_review_repair_3.rs:200:15
+    |
+200 |     let err = boot::configure_boot(&runner, &proposal, &store).expect_err("corrupt pin");
+
+error[E0599]: no variant named `PinMismatch` found for enum `PromotionError`
+   --> adapters/nix/tests/l02_review_repair_3.rs:201:43
+    |
+201 |     assert!(matches!(err, PromotionError::PinMismatch { .. }));
+
+error: could not compile `agentbed-adapter-nix` (test "l02_review_repair_3") due to 14 previous errors
