@@ -31,10 +31,12 @@ pub struct CoreConfig {
 struct ArmedState {
     tx_id: String,
     epoch: u64,
+    #[allow(dead_code)]
     base: String,
     lease_id: String,
     process_group: i32,
     armed_at: SystemTime,
+    #[allow(dead_code)]
     deadline: SystemTime,
 }
 
@@ -99,7 +101,7 @@ impl WatchdogCore {
         let log_epoch = log_reader.as_ref().map_or(0, DecisionLogReader::max_epoch);
 
         match deps.external_floor.read_floor_epoch() {
-            Err(ExternalFloorError::Ambiguous) | Err(ExternalFloorError::Unavailable) => {
+            Err(ExternalFloorError::Ambiguous | ExternalFloorError::Unavailable) => {
                 return Err(WatchdogError::SafeModeActive);
             }
             Ok(floor) => {
@@ -178,15 +180,20 @@ impl WatchdogCore {
                 deadline_nanos,
                 mandatory_invariants,
                 additive_manifest_checks: _,
-            } => self.handle_arm(
-                request_id,
-                host_id,
-                tx_id,
-                *epoch,
-                base,
-                SystemTime::UNIX_EPOCH + Duration::new(*deadline_secs, *deadline_nanos),
-                mandatory_invariants,
-            ),
+            } => {
+                let deadline = SystemTime::UNIX_EPOCH
+                    .checked_add(Duration::new(*deadline_secs, *deadline_nanos))
+                    .ok_or(RpcError::ExpiredDeadline)?;
+                self.handle_arm(
+                    request_id,
+                    host_id,
+                    tx_id,
+                    *epoch,
+                    base,
+                    deadline,
+                    mandatory_invariants,
+                )
+            }
             LocalRequest::ReportHealth {
                 request_id, tx_id, ..
             } => {
@@ -201,7 +208,6 @@ impl WatchdogCore {
                 epoch,
                 lease_id,
                 process_group,
-                renewal_seq: _,
                 ..
             } => {
                 self.handle_lease_renewal(tx_id, *epoch, lease_id, *process_group)?;
@@ -215,7 +221,6 @@ impl WatchdogCore {
                 epoch,
                 lease_id,
                 process_group,
-                heartbeat_seq: _,
                 ..
             } => {
                 self.handle_lease_renewal(tx_id, *epoch, lease_id, *process_group)?;
@@ -240,6 +245,7 @@ impl WatchdogCore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_arm(
         &mut self,
         request_id: &str,
@@ -331,7 +337,11 @@ impl WatchdogCore {
             return Err(RpcError::StaleEpoch);
         }
         let now = self.deps.clock.now();
-        if now > armed.armed_at + LEASE_DURATION {
+        let lease_expired = armed
+            .armed_at
+            .checked_add(LEASE_DURATION)
+            .is_some_and(|expiry| now > expiry);
+        if lease_expired {
             self.run_fence(armed.process_group)?;
         }
         let outcome = self
@@ -377,7 +387,10 @@ impl WatchdogCore {
 
     fn append_authority(&mut self, kind: AuthorityRecordKind, epoch: u64) -> Result<(), RpcError> {
         let path = self.config.store_root.join(DECISION_LOG_REL);
-        let sequence = self.log_seq + 1;
+        let sequence = self
+            .log_seq
+            .checked_add(1)
+            .ok_or(RpcError::SafeModeActive)?;
         append_record(&path, sequence, epoch, kind, &*self.deps.durability)?;
         self.log_seq = sequence;
         Ok(())
@@ -417,9 +430,10 @@ impl WatchdogCore {
                 self.safe_mode = true;
                 RpcError::SafeModeActive
             })?;
+        let parent = path.parent().ok_or(RpcError::SafeModeActive)?;
         self.deps
             .durability
-            .dir_fsync(path.parent().unwrap())
+            .dir_fsync(parent)
             .map_err(RpcError::Durability)?;
         Ok(())
     }
@@ -466,9 +480,11 @@ fn read_epoch_file(path: &Path) -> Result<u64, WatchdogError> {
     if data.len() < 8 {
         return Err(WatchdogError::EpochLogMismatch);
     }
-    Ok(u64::from_be_bytes([
-        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-    ]))
+    let bytes: [u8; 8] = data
+        .get(..8)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(WatchdogError::EpochLogMismatch)?;
+    Ok(u64::from_be_bytes(bytes))
 }
 
 fn write_epoch_file(path: &Path, epoch: u64, deps: &Dependencies) -> Result<(), WatchdogError> {

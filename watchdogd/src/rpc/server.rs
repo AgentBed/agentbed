@@ -15,6 +15,7 @@ use std::path::Path;
 #[derive(Debug)]
 pub struct RpcServer {
     listener: UnixListener,
+    #[allow(dead_code)]
     socket_path: std::path::PathBuf,
 }
 

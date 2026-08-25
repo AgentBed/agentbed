@@ -16,5 +16,27 @@ libc = { workspace = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "allow"
+unused_imports = "allow"
+unused_mut = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+panic = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_possible_wrap = "allow"
+cast_possible_truncation = "allow"
+map_unwrap_or = "allow"
+assigning_clones = "allow"
+implicit_clone = "allow"
+needless_pass_by_value = "allow"

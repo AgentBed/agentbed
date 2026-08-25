@@ -5,7 +5,7 @@ use crate::read_model::AuthorityRecordKind;
 use crate::session::SessionState;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_PAYLOAD_BYTES: usize = 64 * 1024;
@@ -406,7 +406,8 @@ pub fn decode_request(
             "request",
         ],
     )?;
-    let envelope: RequestEnvelope = serde_json::from_value(value).map_err(classify_json_error)?;
+    let envelope: RequestEnvelope =
+        serde_json::from_value(value).map_err(|error| classify_json_error(&error))?;
     session.verify_authenticated(
         &envelope.capability,
         envelope.counter,
@@ -451,7 +452,8 @@ pub fn decode_response(
     let decoded = decode_frame(frame)?;
     let value = parse_json(&decoded.payload)?;
     check_version(&value)?;
-    let envelope: ResponseEnvelope = serde_json::from_value(value).map_err(classify_json_error)?;
+    let envelope: ResponseEnvelope =
+        serde_json::from_value(value).map_err(|error| classify_json_error(&error))?;
     if envelope.capability != established.capability
         || envelope.counter != counter
         || envelope.request_id != request.request_id()
@@ -483,13 +485,6 @@ pub fn read_frame(reader: &mut impl Read) -> Result<Vec<u8>, RpcError> {
     Ok(frame)
 }
 
-pub(crate) fn request_deadline(seconds: u64, nanos: u32) -> Option<SystemTime> {
-    if nanos >= 1_000_000_000 {
-        return None;
-    }
-    SystemTime::UNIX_EPOCH.checked_add(Duration::new(seconds, nanos))
-}
-
 fn decode_control<T>(frame: &[u8]) -> Result<ControlEnvelope<T>, RpcError>
 where
     T: for<'de> Deserialize<'de>,
@@ -498,7 +493,7 @@ where
     let value = parse_json(&decoded.payload)?;
     check_version(&value)?;
     reject_unknown_top_level(&value, &["version", "payload"])?;
-    serde_json::from_value(value).map_err(classify_json_error)
+    serde_json::from_value(value).map_err(|error| classify_json_error(&error))
 }
 
 fn encode_json(value: &impl Serialize) -> Result<Vec<u8>, RpcError> {
@@ -526,7 +521,7 @@ fn reject_unknown_top_level(value: &serde_json::Value, allowed: &[&str]) -> Resu
     Ok(())
 }
 
-fn classify_json_error(error: serde_json::Error) -> RpcError {
+fn classify_json_error(error: &serde_json::Error) -> RpcError {
     if error.to_string().contains("unknown field") {
         RpcError::DenyUnknown
     } else {

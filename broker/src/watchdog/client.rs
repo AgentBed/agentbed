@@ -16,6 +16,7 @@ pub enum WatchdogClientError {
 }
 
 /// Local-process watchdog RPC client stub.
+#[derive(Debug)]
 pub struct WatchdogClient {
     socket_path: PathBuf,
 }

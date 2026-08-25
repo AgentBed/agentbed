@@ -186,6 +186,7 @@ fn invalid_log(message: &str) -> Error {
     Error::new(ErrorKind::InvalidData, message)
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn io_durability(error: Error) -> DurabilityError {
     DurabilityError::Io(error.to_string())
 }
