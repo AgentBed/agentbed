@@ -29,6 +29,12 @@ pub enum PromotionError {
     AlreadyActivated,
     BaseMoved,
     NotRegistered,
+    ReservationNotDurable,
+    PinRequired,
+    PinMismatch {
+        expected: String,
+        actual: String,
+    },
 }
 
 impl From<CommandError> for PromotionError {

@@ -194,6 +194,9 @@ fn promotion_build_and_test_bind_to_capture() {
 
 #[test]
 fn promotion_pin_profile_boot_flush_readback_happy_path() {
+    let store = CaptureStore::new(
+        std::env::temp_dir().join(format!("agb6-pin-happy-{}", std::process::id())),
+    );
     let runner = Arc::new(FakeCommandRunner::new());
     let capture = propose::CapturedProposal {
         base_revision: base_revision(),
@@ -234,9 +237,9 @@ fn promotion_pin_profile_boot_flush_readback_happy_path() {
         CommandSpec::read_closure_store_path(pinned),
         CommandOutput::ok(&format!("{pinned}\n")),
     );
-    pin::pin_closure(runner.as_ref(), &capture).expect("pin");
-    profile::advance_profile(runner.as_ref(), &capture, pinned).expect("profile");
-    boot::configure_boot(runner.as_ref(), pinned).expect("boot");
+    pin::pin_closure(runner.as_ref(), &capture, &store).expect("pin");
+    profile::advance_profile(runner.as_ref(), &capture, &store).expect("profile");
+    boot::configure_boot(runner.as_ref(), &capture, &store).expect("boot");
     flush::flush_boundaries(runner.as_ref()).expect("flush");
     let agreement = readback::read_agreement(runner.as_ref(), pinned).expect("readback");
     assert!(agreement.profile_matches);

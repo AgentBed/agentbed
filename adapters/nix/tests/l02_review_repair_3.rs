@@ -6,7 +6,7 @@
     clippy::needless_borrows_for_generic_args
 )]
 
-use agentbed_adapter_nix::capture::{CaptureStore, FailSyncOn, PathSync, StdPathSync};
+use agentbed_adapter_nix::capture::{CaptureStore, FailSyncOn, StdPathSync};
 use agentbed_adapter_nix::command_runner::{CommandOutput, CommandSpec, FakeCommandRunner};
 use agentbed_adapter_nix::promotion::{boot, pin, profile, test_activation, PromotionError};
 use agentbed_adapter_nix::propose;
@@ -103,8 +103,9 @@ fn protected_rejects_dynamic_kernel_attribute_expression() {
 fn protected_allows_kernel_string_decoy_in_comment() {
     let change = ConfigFileChange {
         path: "/etc/nixos/safe.nix".to_owned(),
-        content: "# boot.kernelPackages = pkgs.linuxPackages_latest;\n{ services.nginx.enable = true; }"
-            .to_owned(),
+        content:
+            "# boot.kernelPackages = pkgs.linuxPackages_latest;\n{ services.nginx.enable = true; }"
+                .to_owned(),
     };
     protected::check_protected_changes(&[change]).expect("comment decoy");
 }
@@ -166,8 +167,7 @@ fn profile_rejects_capture_without_matching_pin() {
         CommandOutput::ok("/nix/store/profile-bypass\n"),
     );
     pin::pin_closure(&runner, &pinned_capture, &store).expect("pin");
-    let err =
-        profile::advance_profile(&runner, &other_capture, &store).expect_err("bypass");
+    let err = profile::advance_profile(&runner, &other_capture, &store).expect_err("bypass");
     assert!(matches!(err, PromotionError::PinMismatch { .. }));
 }
 

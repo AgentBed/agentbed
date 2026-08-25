@@ -17,6 +17,7 @@ pub enum ProtectedRejectReason {
     Firewall,
     StorageLayout,
     ConflictingChange,
+    DynamicExpression,
 }
 
 /// Reject any change that would touch a protected resource.
@@ -59,6 +60,9 @@ fn check_one(change: &ConfigFileChange, normalized: &str) -> Result<(), Protecte
     }
 
     let semantic = normalize_nix_content(&change.content);
+    if semantic.contains("${") {
+        return Err(ProtectedRejectReason::DynamicExpression);
+    }
     if content_selects_watchdog(&semantic) {
         return Err(ProtectedRejectReason::Watchdog);
     }
@@ -80,11 +84,108 @@ fn check_one(change: &ConfigFileChange, normalized: &str) -> Result<(), Protecte
 }
 
 fn normalize_nix_content(content: &str) -> String {
-    content
-        .to_lowercase()
+    let without_comments = strip_nix_comments(content);
+    if without_comments.contains("${") {
+        return "${".to_owned();
+    }
+    let with_attrs = canonicalize_quoted_attributes(&without_comments);
+    let without_string_values = remove_string_literal_values(&with_attrs);
+    without_string_values
         .chars()
         .filter(|ch| !ch.is_whitespace())
         .collect()
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+fn strip_nix_comments(content: &str) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = content.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '#' {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            i += 2;
+            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                i += 1;
+            }
+            i = i.saturating_add(2);
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+fn remove_string_literal_values(content: &str) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = content.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '"' {
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == '\\' {
+                    i = i.saturating_add(2);
+                    continue;
+                }
+                if chars[i] == '"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            out.push(' ');
+            continue;
+        }
+        if chars[i] == '\'' && i + 1 < chars.len() && chars[i + 1] == '\'' {
+            i += 2;
+            while i + 1 < chars.len() && !(chars[i] == '\'' && chars[i + 1] == '\'') {
+                i += 1;
+            }
+            i = i.saturating_add(2);
+            out.push(' ');
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+fn canonicalize_quoted_attributes(content: &str) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = content.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '.' && i + 1 < chars.len() && chars[i + 1] == '"' {
+            out.push('.');
+            i += 2;
+            while i < chars.len() && chars[i] != '"' {
+                if chars[i] == '\\' && i + 1 < chars.len() {
+                    out.push(chars[i + 1].to_ascii_lowercase());
+                    i += 2;
+                    continue;
+                }
+                out.push(chars[i].to_ascii_lowercase());
+                i += 1;
+            }
+            if i < chars.len() {
+                i += 1;
+            }
+            continue;
+        }
+        out.push(chars[i].to_ascii_lowercase());
+        i += 1;
+    }
+    out
 }
 
 fn content_selects_watchdog(content: &str) -> bool {

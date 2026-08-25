@@ -125,13 +125,16 @@ fn probe_rejects_short_and_non_hex_digest() {
 
 #[test]
 fn pin_closure_must_match_captured_candidate() {
+    let store = CaptureStore::new(
+        std::env::temp_dir().join(format!("agb6-review1-pin-{}", std::process::id())),
+    );
     let runner = FakeCommandRunner::new();
     let capture = capture();
     runner.register(
         CommandSpec::nix_store_realise(&capture.candidate_closure),
         CommandOutput::ok("/nix/store/other-closure\n"),
     );
-    let err = pin::pin_closure(&runner, &capture).expect_err("mismatch rejected");
+    let err = pin::pin_closure(&runner, &capture, &store).expect_err("mismatch rejected");
     assert!(matches!(err, PromotionError::ClosureMismatch { .. }));
 }
 

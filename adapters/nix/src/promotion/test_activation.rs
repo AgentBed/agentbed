@@ -11,7 +11,10 @@ pub fn activate_once(
 ) -> Result<(), PromotionError> {
     store
         .reserve_activation(&capture.candidate_closure)
-        .map_err(|_| PromotionError::AlreadyActivated)?;
+        .map_err(|err| match err {
+            crate::capture::CaptureError::Conflict => PromotionError::AlreadyActivated,
+            crate::capture::CaptureError::Io => PromotionError::ReservationNotDurable,
+        })?;
 
     let Ok(current) = probe::probe(runner) else {
         store.release_activation_reservation(&capture.candidate_closure);

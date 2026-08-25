@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Errors from capture persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,18 +15,94 @@ pub enum CaptureError {
     Io,
 }
 
+/// Durable filesystem sync boundary for crash-safety tests and production.
+pub trait PathSync: Send + Sync + std::fmt::Debug {
+    fn sync_path(&self, path: &Path) -> Result<(), CaptureError>;
+    fn sync_parent(&self, path: &Path) -> Result<(), CaptureError>;
+    fn sync_dir(&self, path: &Path) -> Result<(), CaptureError>;
+}
+
+/// Production fsync implementation.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StdPathSync;
+
+impl PathSync for StdPathSync {
+    fn sync_path(&self, path: &Path) -> Result<(), CaptureError> {
+        sync_path_impl(path)
+    }
+
+    fn sync_parent(&self, path: &Path) -> Result<(), CaptureError> {
+        sync_parent_impl(path)
+    }
+
+    fn sync_dir(&self, path: &Path) -> Result<(), CaptureError> {
+        let dir = File::open(path).map_err(|_| CaptureError::Io)?;
+        dir.sync_all().map_err(|_| CaptureError::Io)
+    }
+}
+
+/// Test hook that fails sync on selected paths.
+#[derive(Debug)]
+pub struct FailSyncOn {
+    fail_paths: Vec<PathBuf>,
+    inner: StdPathSync,
+}
+
+impl FailSyncOn {
+    pub fn new(fail_paths: Vec<PathBuf>, inner: StdPathSync) -> Self {
+        Self { fail_paths, inner }
+    }
+
+    fn should_fail(&self, path: &Path) -> bool {
+        self.fail_paths
+            .iter()
+            .any(|candidate| candidate == path || path.starts_with(candidate))
+    }
+}
+
+impl PathSync for FailSyncOn {
+    fn sync_path(&self, path: &Path) -> Result<(), CaptureError> {
+        if self.should_fail(path) {
+            return Err(CaptureError::Io);
+        }
+        self.inner.sync_path(path)
+    }
+
+    fn sync_parent(&self, path: &Path) -> Result<(), CaptureError> {
+        if let Some(parent) = path.parent() {
+            if self.should_fail(parent) {
+                return Err(CaptureError::Io);
+            }
+        }
+        self.inner.sync_parent(path)
+    }
+
+    fn sync_dir(&self, path: &Path) -> Result<(), CaptureError> {
+        if self.should_fail(path) {
+            return Err(CaptureError::Io);
+        }
+        self.inner.sync_dir(path)
+    }
+}
+
 /// Durable capture store for crash recovery.
 #[derive(Debug)]
 pub struct CaptureStore {
     root: PathBuf,
     lock: Mutex<()>,
+    syncer: Arc<dyn PathSync>,
 }
 
 impl CaptureStore {
     pub fn new(root: PathBuf) -> Self {
+        Self::with_syncer(root, Arc::new(StdPathSync))
+    }
+
+    pub fn with_syncer(root: PathBuf, syncer: Arc<dyn PathSync>) -> Self {
         Self {
             root,
             lock: Mutex::new(()),
+            syncer,
         }
     }
 
@@ -49,7 +125,9 @@ impl CaptureStore {
 
     pub fn reserve_activation(&self, candidate_closure: &str) -> Result<(), CaptureError> {
         let _guard = self.lock.lock().expect("capture");
-        fs::create_dir_all(self.activations_dir()).map_err(|_| CaptureError::Io)?;
+        let activations = self.activations_dir();
+        fs::create_dir_all(&activations).map_err(|_| CaptureError::Io)?;
+        self.syncer.sync_dir(&activations)?;
         if self.activation_record_path(candidate_closure).exists() {
             return Err(CaptureError::Conflict);
         }
@@ -64,7 +142,8 @@ impl CaptureStore {
             .map_err(|_| CaptureError::Conflict)?;
         file.write_all(b"activating\n")
             .map_err(|_| CaptureError::Io)?;
-        sync_path(&lock)?;
+        self.syncer.sync_path(&lock)?;
+        self.syncer.sync_parent(&lock)?;
         Ok(())
     }
 
@@ -90,9 +169,58 @@ impl CaptureStore {
                 .open(&activated)
                 .map_err(|_| CaptureError::Conflict)?;
         }
-        sync_path(&activated)?;
-        sync_parent(&activated)?;
+        self.syncer.sync_path(&activated)?;
+        self.syncer.sync_parent(&activated)?;
         Ok(())
+    }
+
+    pub fn store_pin(
+        &self,
+        capture: &CapturedProposal,
+        realised: &str,
+    ) -> Result<(), CaptureError> {
+        let _guard = self.lock.lock().expect("capture");
+        fs::create_dir_all(&self.root).map_err(|_| CaptureError::Io)?;
+        self.syncer.sync_dir(&self.root)?;
+        let record = PinRecord {
+            candidate_closure: capture.candidate_closure.clone(),
+            base_generation: capture.base_revision.generation.clone(),
+            base_git_commit: capture.base_revision.etc_git_commit.clone(),
+            base_config_digest: digest_hex(&capture.base_revision.config_digest),
+            realised_closure: realised.to_owned(),
+        };
+        let raw = serde_json::to_string(&record).map_err(|_| CaptureError::Io)?;
+        let tmp = self.pin_path().with_extension("json.tmp");
+        fs::write(&tmp, raw).map_err(|_| CaptureError::Io)?;
+        self.syncer.sync_path(&tmp)?;
+        fs::rename(&tmp, self.pin_path()).map_err(|_| CaptureError::Io)?;
+        let pin_path = self.pin_path();
+        self.syncer.sync_path(&pin_path)?;
+        self.syncer.sync_parent(&pin_path)?;
+        let marker = self.pin_path().with_extension("json.synced");
+        let mut marker_file = File::create(&marker).map_err(|_| CaptureError::Io)?;
+        marker_file
+            .write_all(b"synced\n")
+            .map_err(|_| CaptureError::Io)?;
+        self.syncer.sync_path(&marker)?;
+        self.syncer.sync_parent(&marker)?;
+        Ok(())
+    }
+
+    pub fn load_verified_pin(&self, capture: &CapturedProposal) -> Result<String, CaptureError> {
+        let path = self.pin_path();
+        if !path.exists() {
+            return Err(CaptureError::Conflict);
+        }
+        let raw = fs::read_to_string(path).map_err(|_| CaptureError::Io)?;
+        let record: PinRecord = serde_json::from_str(&raw).map_err(|_| CaptureError::Io)?;
+        if !record.matches_capture(capture) {
+            return Err(CaptureError::Conflict);
+        }
+        if !self.pin_path().with_extension("json.synced").exists() {
+            return Err(CaptureError::Conflict);
+        }
+        Ok(record.realised_closure)
     }
 
     fn activations_dir(&self) -> PathBuf {
@@ -102,6 +230,10 @@ impl CaptureStore {
     fn activation_lock_path(&self, candidate_closure: &str) -> PathBuf {
         self.activations_dir()
             .join(format!("{}.lock", activation_filename(candidate_closure)))
+    }
+
+    fn pin_path(&self) -> PathBuf {
+        self.root.join("pin.json")
     }
 
     pub fn load_active(&self) -> Result<Option<StoredCapture>, CaptureError> {
@@ -122,6 +254,7 @@ impl CaptureStore {
     ) -> Result<(), CaptureError> {
         let _guard = self.lock.lock().expect("capture");
         fs::create_dir_all(&self.root).map_err(|_| CaptureError::Io)?;
+        self.syncer.sync_dir(&self.root)?;
         if self.active_path().exists() {
             return Err(CaptureError::Conflict);
         }
@@ -133,22 +266,41 @@ impl CaptureStore {
         let tmp = self.root.join("active.json.tmp");
         let final_path = self.active_path();
         fs::write(&tmp, raw).map_err(|_| CaptureError::Io)?;
-        sync_path(&tmp)?;
+        self.syncer.sync_path(&tmp)?;
         fs::rename(&tmp, &final_path).map_err(|_| CaptureError::Io)?;
-        sync_path(&final_path)?;
-        sync_parent(&final_path)?;
+        self.syncer.sync_path(&final_path)?;
+        self.syncer.sync_parent(&final_path)?;
         let marker = final_path.with_extension("json.synced");
         let mut marker_file = File::create(&marker).map_err(|_| CaptureError::Io)?;
         marker_file
             .write_all(b"synced\n")
             .map_err(|_| CaptureError::Io)?;
-        sync_path(&marker)?;
-        sync_parent(&marker)?;
+        self.syncer.sync_path(&marker)?;
+        self.syncer.sync_parent(&marker)?;
         Ok(())
     }
 
     fn active_path(&self) -> PathBuf {
         self.root.join("active.json")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PinRecord {
+    pub candidate_closure: String,
+    pub base_generation: Option<String>,
+    pub base_git_commit: String,
+    pub base_config_digest: String,
+    pub realised_closure: String,
+}
+
+impl PinRecord {
+    fn matches_capture(&self, capture: &CapturedProposal) -> bool {
+        self.candidate_closure == capture.candidate_closure
+            && self.base_generation == capture.base_revision.generation
+            && self.base_git_commit == capture.base_revision.etc_git_commit
+            && self.base_config_digest == digest_hex(&capture.base_revision.config_digest)
+            && self.realised_closure == capture.candidate_closure
     }
 }
 
@@ -169,7 +321,16 @@ fn activation_filename(candidate_closure: &str) -> String {
         + ".activated"
 }
 
-fn sync_path(path: &Path) -> Result<(), CaptureError> {
+fn digest_hex(digest: &agentbed_protocol::digest::Digest) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(64);
+    for byte in digest.as_bytes() {
+        write!(out, "{byte:02x}").expect("hex");
+    }
+    out
+}
+
+fn sync_path_impl(path: &Path) -> Result<(), CaptureError> {
     let file = OpenOptions::new()
         .write(true)
         .open(path)
@@ -177,7 +338,7 @@ fn sync_path(path: &Path) -> Result<(), CaptureError> {
     file.sync_all().map_err(|_| CaptureError::Io)
 }
 
-fn sync_parent(path: &Path) -> Result<(), CaptureError> {
+fn sync_parent_impl(path: &Path) -> Result<(), CaptureError> {
     let Some(parent) = path.parent() else {
         return Ok(());
     };
