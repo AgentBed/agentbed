@@ -114,6 +114,14 @@ impl TransactionEngine {
             safe_mode = true;
         }
         if !safe_mode {
+            let stored_events = events
+                .load_stored_events()
+                .map_err(|_| EngineError::SafeMode)?;
+            if !recovery::validate_tx_state_events_against_wal(&recovery.records, &stored_events) {
+                safe_mode = true;
+            }
+        }
+        if !safe_mode {
             let mut latest_by_tx: HashMap<TxId, &WalRecord> = HashMap::new();
             for record in &recovery.records {
                 latest_by_tx.insert(record.tx_id.clone(), record);
@@ -608,17 +616,6 @@ impl TransactionEngine {
         result_json: &str,
     ) -> Result<TxStepResult, EngineError> {
         let tx_id = params.tx_id.as_str();
-        if snap.state == WireState::Testing && self.has_rejected_state_event(tx_id) {
-            self.rewrite_moved_base_rejection(snap, tx_id, params, fingerprint, result_json)?;
-            self.record_idempotency(IdempotencyRecord {
-                key: key.to_owned(),
-                tx_id: tx_id.to_owned(),
-                fingerprint: fingerprint.to_owned(),
-                result_json: result_json.to_owned(),
-            })?;
-            return Err(EngineError::BaseRevisionMoved);
-        }
-
         let seq = self.persist_transition(
             tx_id,
             WireState::Rejected,
@@ -633,121 +630,34 @@ impl TransactionEngine {
             Some(result_json.to_owned()),
         )?;
         if let Err(err) = self.append_state_event(tx_id, WireState::Rejected) {
-            self.soft_revert_wal(tx_id, seq)?;
+            self.wal
+                .lock()
+                .expect("wal")
+                .revert_last_transition(seq)
+                .map_err(EngineError::Storage)?;
+            *self.next_seq.lock().expect("seq") = seq.saturating_sub(1);
+            self.txs.lock().expect("txs").insert(
+                tx_id.to_owned(),
+                TxSnapshot {
+                    tx_id: tx_id.to_owned(),
+                    state: snap.state,
+                    agent_id: snap.agent_id.clone(),
+                    manifest_digest: snap.manifest_digest.clone(),
+                    base_revision: snap.base_revision.clone(),
+                    effect_set: snap.effect_set.clone(),
+                    diff: snap.diff.clone(),
+                    affected_resources: snap.affected_resources.clone(),
+                },
+            );
             return Err(err);
         }
-        if let Err(err) = self.record_idempotency(IdempotencyRecord {
+        self.record_idempotency(IdempotencyRecord {
             key: key.to_owned(),
             tx_id: tx_id.to_owned(),
             fingerprint: fingerprint.to_owned(),
             result_json: result_json.to_owned(),
-        }) {
-            let _ = self.soft_revert_wal(tx_id, seq);
-            return Err(err);
-        }
+        })?;
         Err(EngineError::BaseRevisionMoved)
-    }
-
-    fn rewrite_moved_base_rejection(
-        &self,
-        snap: &TxSnapshot,
-        tx_id: &str,
-        params: &TxApplyParams,
-        fingerprint: &str,
-        result_json: &str,
-    ) -> Result<(), EngineError> {
-        let records = self
-            .wal
-            .lock()
-            .expect("wal")
-            .load_records()
-            .map_err(EngineError::Storage)?;
-        let latest = records
-            .iter()
-            .filter(|record| record.tx_id == tx_id)
-            .max_by_key(|record| record.seq)
-            .ok_or(EngineError::NotFound)?;
-        let record = WalRecord {
-            record_version: 1,
-            seq: latest.seq,
-            tx_id: tx_id.to_owned(),
-            state: WireState::Rejected,
-            idempotency_key: Some(params.idempotency_key.as_str().to_owned()),
-            idem_fingerprint: Some(fingerprint.to_owned()),
-            agent_id: snap.agent_id.clone(),
-            manifest_digest: snap.manifest_digest.clone(),
-            base_revision: snap.base_revision.clone(),
-            effect_set: snap.effect_set.clone(),
-            diff: snap.diff.clone(),
-            affected_resources: snap.affected_resources.clone(),
-            approval_ref: latest.approval_ref.clone(),
-            result_json: Some(result_json.to_owned()),
-        };
-        self.wal
-            .lock()
-            .expect("wal")
-            .rewrite_transition(&record)
-            .map_err(EngineError::Storage)?;
-        self.txs.lock().expect("txs").insert(
-            tx_id.to_owned(),
-            TxSnapshot {
-                tx_id: tx_id.to_owned(),
-                state: WireState::Rejected,
-                agent_id: snap.agent_id.clone(),
-                manifest_digest: snap.manifest_digest.clone(),
-                base_revision: snap.base_revision.clone(),
-                effect_set: snap.effect_set.clone(),
-                diff: snap.diff.clone(),
-                affected_resources: snap.affected_resources.clone(),
-            },
-        );
-        Ok(())
-    }
-
-    fn soft_revert_wal(&self, tx_id: &str, seq: u64) -> Result<(), EngineError> {
-        self.wal
-            .lock()
-            .expect("wal")
-            .revert_last_transition(seq)
-            .map_err(EngineError::Storage)?;
-        *self.next_seq.lock().expect("seq") = seq.saturating_sub(1);
-        let records = self
-            .wal
-            .lock()
-            .expect("wal")
-            .load_records()
-            .map_err(EngineError::Storage)?;
-        let Some(latest) = records
-            .iter()
-            .filter(|record| record.tx_id == tx_id)
-            .max_by_key(|record| record.seq)
-        else {
-            self.txs.lock().expect("txs").remove(tx_id);
-            return Ok(());
-        };
-        self.txs.lock().expect("txs").insert(
-            tx_id.to_owned(),
-            TxSnapshot {
-                tx_id: tx_id.to_owned(),
-                state: latest.state,
-                agent_id: latest.agent_id.clone(),
-                manifest_digest: latest.manifest_digest.clone(),
-                base_revision: latest.base_revision.clone(),
-                effect_set: latest.effect_set.clone(),
-                diff: latest.diff.clone(),
-                affected_resources: latest.affected_resources.clone(),
-            },
-        );
-        Ok(())
-    }
-
-    fn has_rejected_state_event(&self, tx_id: &str) -> bool {
-        let log_path = self.state_root.join("events/log.jsonl");
-        let Ok(text) = std::fs::read_to_string(&log_path) else {
-            return false;
-        };
-        text.lines()
-            .any(|line| line.contains(tx_id) && line.contains("Rejected"))
     }
 }
 

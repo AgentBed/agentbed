@@ -224,6 +224,10 @@ impl EventLog {
         EventCursor::after(event).with_log_id(self.log_id())
     }
 
+    pub fn load_stored_events(&self) -> Result<Vec<StoredEvent>, EventError> {
+        self.read_all()
+    }
+
     fn read_all(&self) -> Result<Vec<StoredEvent>, EventError> {
         let log_path = self.root.join("log.jsonl");
         if !log_path.exists() {

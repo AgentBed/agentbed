@@ -116,3 +116,36 @@ cargo test --workspace                                                       # P
 Production files changed @ 41728986: `broker/src/transaction/{recovery,engine}.rs`, `broker/src/storage/{wal,idempotency}.rs`. Post-GREEN test-only lint hardening: `broker/tests/l01_repair_review.rs` (`7da8f021b1e59067773c5d6ef75ed9213487474453e1a9e25a16b4da6fe30ff0` → `b201c12801b3887255c0de384c8dbbbd8e3ad5c5a7b037133103f1d2a3eaa853`).
 
 Test hash (`broker/tests/l01_repair_review.rs`): `b201c12801b3887255c0de384c8dbbbd8e3ad5c5a7b037133103f1d2a3eaa853`.
+
+## Repair round 6 (native review #5013663187 @ `ef0253f` RED checkpoint)
+
+| Finding | Fix |
+| --- | --- |
+| Moved-base idempotency fault soft-reverted authoritative `Rejected` WAL while event remained durable | `broker/src/transaction/engine.rs` `refuse_moved_base_apply` keeps append-only `Rejected` WAL + matching `tx.state` event on idempotency `Storage` fault; only rolls back WAL when event append fails |
+| In-place `Testing` WAL rewrite / substring event recovery for moved-base refusals | Removed `rewrite_moved_base_rejection`, `soft_revert_wal`, `has_rejected_state_event`, and `WalStore::rewrite_transition` |
+| WAL/event transaction-state divergence not entering safe mode on open | `broker/src/transaction/recovery.rs` `validate_tx_state_events_against_wal` parses canonical `tx.state` payloads and fails closed when events exceed or mismatch authoritative WAL prefix; `broker/src/events.rs` `load_stored_events` for open cross-check |
+| Idempotency rebuild after crash-before-retry | Existing `merge_from_wal` + WAL lookup replays `BaseRevisionMoved` without new WAL/event when secondary idempotency index is missing |
+
+RED checkpoint: `ef0253f6e75647481f1a663c1747344fe34edee6` (parent `b8acd34e647b1816aea17d3be013384e82103067`).
+
+RED matrix @ `ef0253f` (unpiped, `--test-threads=1`): **3 FAIL / 44 PASS** (`moved_base_apply_idempotency_write_failure_crash_before_retry_consistency`, `moved_base_apply_idempotency_rename_failure_crash_before_retry_consistency`, `orphan_rejected_event_without_wal_transition_enters_safe_mode`).
+
+Test hash (`broker/tests/l01_repair_review.rs`): `76f3d4b5ca3f49fbbf1bc10c05deda1de9768cf322c147bef893e218793593ac`.
+
+GREEN @ `f35472a`:
+
+```text
+cargo test -p agentbed-broker --test l01_repair_review moved_base_apply_idempotency_write_failure_crash_before_retry_consistency -- --exact --test-threads=1   # PASS
+cargo test -p agentbed-broker --test l01_repair_review moved_base_apply_idempotency_rename_failure_crash_before_retry_consistency -- --exact --test-threads=1   # PASS
+cargo test -p agentbed-broker --test l01_repair_review orphan_rejected_event_without_wal_transition_enters_safe_mode -- --exact --test-threads=1   # PASS
+cargo test -p agentbed-broker --test l01_repair_review -- --test-threads=1   # 43 passed; 4 failed (review #5011747127 moved-base idempotency WAL-count tests conflict with append-only repair)
+cargo fmt --all -- --check                                                   # FAIL (read-only `broker/tests/l01_repair_review.rs` @ `76f3d4b5…` not rustfmt-clean; cannot chmod/edit tests)
+cargo clippy --workspace --all-targets -- -D warnings                        # FAIL (`l01_repair_review.rs` arithmetic-side-effects in RED-added tests; read-only)
+cargo clippy -p agentbed-broker --lib -- -D warnings                         # PASS
+cargo build --workspace --all-targets                                        # PASS
+cargo test --workspace                                                       # FAIL (`l01_repair_review` 43/47; all other workspace tests PASS)
+```
+
+Production files changed: `broker/src/events.rs`, `broker/src/storage/wal.rs`, `broker/src/transaction/{engine,recovery}.rs`.
+
+Gate 1 remains open.

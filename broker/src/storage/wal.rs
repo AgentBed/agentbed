@@ -174,22 +174,6 @@ impl WalStore {
         Ok(())
     }
 
-    pub fn rewrite_transition(&mut self, record: &WalRecord) -> Result<(), DurabilityError> {
-        if self.safe_mode {
-            return Err(DurabilityError::FsyncFailed);
-        }
-        let seq = record.seq;
-        let final_path = self.root.join("records").join(format!("{seq}.json"));
-        if !final_path.exists() {
-            return Err(DurabilityError::Io);
-        }
-        let temp = self.root.join("records").join(format!("{seq}.json.tmp"));
-        let bytes = serde_json::to_vec(record).map_err(|_| DurabilityError::FsyncFailed)?;
-        self.durability.write_all_and_sync(&temp, &bytes)?;
-        self.durability.atomic_rename(&temp, &final_path)?;
-        Ok(())
-    }
-
     pub fn revert_last_transition(&mut self, seq: u64) -> Result<(), DurabilityError> {
         let record_path = self.root.join("records").join(format!("{seq}.json"));
         if record_path.exists() {
