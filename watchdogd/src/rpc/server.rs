@@ -18,6 +18,7 @@ const SOCKET_IO_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug)]
 pub struct RpcServer {
     listener: UnixListener,
+    #[allow(dead_code)]
     socket_path: std::path::PathBuf,
 }
 

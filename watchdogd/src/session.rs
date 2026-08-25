@@ -8,6 +8,7 @@ use crate::rpc::protocol::{SessionBind, SessionEstablished};
 pub struct SessionState {
     pub(crate) established: Option<SessionEstablished>,
     pub(crate) last_counter: u64,
+    #[allow(dead_code)]
     pub(crate) bound: Option<BoundSession>,
 }
 
@@ -94,6 +95,7 @@ impl SessionState {
         Ok((state, established, Some(bound)))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn bound(&self) -> Option<&BoundSession> {
         self.bound.as_ref()
     }
