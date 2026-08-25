@@ -45,8 +45,12 @@ fn register_probe_commands(runner: &FakeCommandRunner) {
     runner.register(CommandSpec::etc_git_head(), CommandOutput::ok("abc123\n"));
     runner.register(
         CommandSpec::config_digest(),
-        CommandOutput::ok(&"11".repeat(64)),
+        CommandOutput::ok(&"11".repeat(32)),
     );
+}
+
+fn register_activation_probe(runner: &FakeCommandRunner) {
+    register_probe_commands(runner);
 }
 
 #[test]
@@ -156,10 +160,12 @@ fn propose_captures_immutable_candidate_and_replays_identically() {
 
 #[test]
 fn promotion_build_and_test_bind_to_capture() {
+    test_activation::reset_activation_ledger_for_tests();
     let runner = Arc::new(FakeCommandRunner::new());
+    register_activation_probe(runner.as_ref());
     let capture = propose::CapturedProposal {
         base_revision: base_revision(),
-        candidate_closure: "/nix/store/candidate-closure".to_owned(),
+        candidate_closure: "/nix/store/candidate-closure-build".to_owned(),
         flake_ref: "/etc/nixos#agentbed".to_owned(),
         diff: "demo".to_owned(),
     };
@@ -169,7 +175,7 @@ fn promotion_build_and_test_bind_to_capture() {
     );
     runner.register(
         CommandSpec::nixos_rebuild_test(&capture),
-        CommandOutput::ok("tested\n"),
+        CommandOutput::ok("/nix/store/candidate-closure-build tested\n"),
     );
     build::build(runner.as_ref(), &capture).expect("build");
     test_activation::activate_once(runner.as_ref(), &capture).expect("test");
@@ -189,11 +195,11 @@ fn promotion_pin_profile_boot_flush_readback_happy_path() {
     let runner = Arc::new(FakeCommandRunner::new());
     let capture = propose::CapturedProposal {
         base_revision: base_revision(),
-        candidate_closure: "/nix/store/candidate-closure".to_owned(),
+        candidate_closure: "/nix/store/candidate-closure-pin".to_owned(),
         flake_ref: "/etc/nixos#agentbed".to_owned(),
         diff: "demo".to_owned(),
     };
-    let pinned = "/nix/store/candidate-closure";
+    let pinned = "/nix/store/candidate-closure-pin";
     runner.register(
         CommandSpec::nix_store_realise(pinned),
         CommandOutput::ok(&format!("{pinned}\n")),
@@ -219,8 +225,12 @@ fn promotion_pin_profile_boot_flush_readback_happy_path() {
         CommandSpec::read_closure_hash(pinned),
         CommandOutput::ok("hash-abc\n"),
     );
+    runner.register(
+        CommandSpec::read_closure_store_path(pinned),
+        CommandOutput::ok(&format!("{pinned}\n")),
+    );
     pin::pin_closure(runner.as_ref(), &capture).expect("pin");
-    profile::advance_profile(runner.as_ref(), pinned).expect("profile");
+    profile::advance_profile(runner.as_ref(), &capture, pinned).expect("profile");
     boot::configure_boot(runner.as_ref(), pinned).expect("boot");
     flush::flush_boundaries(runner.as_ref()).expect("flush");
     let agreement = readback::read_agreement(runner.as_ref(), pinned).expect("readback");
@@ -231,10 +241,11 @@ fn promotion_pin_profile_boot_flush_readback_happy_path() {
 
 #[test]
 fn promotion_failures_are_explicit_at_each_boundary() {
+    test_activation::reset_activation_ledger_for_tests();
     let runner = Arc::new(FakeCommandRunner::new());
     let capture = propose::CapturedProposal {
         base_revision: base_revision(),
-        candidate_closure: "/nix/store/candidate-closure".to_owned(),
+        candidate_closure: "/nix/store/candidate-closure-failures".to_owned(),
         flake_ref: "/etc/nixos#agentbed".to_owned(),
         diff: "demo".to_owned(),
     };
@@ -246,6 +257,7 @@ fn promotion_failures_are_explicit_at_each_boundary() {
     assert!(matches!(err, PromotionError::CommandFailed { .. }));
 
     runner.clear();
+    register_activation_probe(runner.as_ref());
     runner.register(
         CommandSpec::nixos_rebuild_build(&capture),
         CommandOutput::ok("built\n"),
@@ -274,6 +286,10 @@ fn readback_detects_profile_boot_mismatch() {
     runner.register(
         CommandSpec::read_closure_hash(pinned),
         CommandOutput::ok("hash-abc\n"),
+    );
+    runner.register(
+        CommandSpec::read_closure_store_path(pinned),
+        CommandOutput::ok(&format!("{pinned}\n")),
     );
     let err = readback::read_agreement(runner.as_ref(), pinned).expect_err("mismatch");
     assert!(matches!(err, PromotionError::AgreementMismatch { .. }));

@@ -27,6 +27,7 @@ pub struct AdapterProposeOutcome {
     pub diff: String,
     pub test_plan: TestPlan,
     pub affected_resources: Vec<String>,
+    pub candidate_closure: Option<String>,
 }
 
 /// Adapter-level propose failures before WAL side effects.
@@ -70,6 +71,7 @@ fn unresolved_propose(changes: &[ConfigFileChange]) -> AdapterProposeOutcome {
             steps: vec!["noop-test".to_owned()],
         },
         affected_resources: vec!["root_config".to_owned()],
+        candidate_closure: None,
     }
 }
 

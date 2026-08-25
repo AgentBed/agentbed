@@ -23,10 +23,16 @@ pub fn read_agreement(
         .stdout
         .trim()
         .to_owned();
+    let store_path = runner
+        .run(&CommandSpec::read_closure_store_path(pinned))?
+        .stdout
+        .trim()
+        .to_owned();
     let _hash = runner.run(&CommandSpec::read_closure_hash(pinned))?;
     let profile_matches = profile == pinned;
     let boot_matches = boot == pinned;
-    if !profile_matches || !boot_matches {
+    let closure_matches = store_path == pinned;
+    if !profile_matches || !boot_matches || !closure_matches {
         return Err(PromotionError::AgreementMismatch {
             profile,
             boot,
@@ -36,6 +42,6 @@ pub fn read_agreement(
     Ok(Agreement {
         profile_matches,
         boot_matches,
-        closure_matches: true,
+        closure_matches,
     })
 }

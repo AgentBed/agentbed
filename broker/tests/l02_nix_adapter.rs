@@ -70,7 +70,7 @@ fn register_nix_probe(runner: &FakeCommandRunner) {
     runner.register(CommandSpec::etc_git_head(), CommandOutput::ok("abc123\n"));
     runner.register(
         CommandSpec::config_digest(),
-        CommandOutput::ok(&format!("{}", "11".repeat(64))),
+        CommandOutput::ok("11".repeat(32)),
     );
 }
 

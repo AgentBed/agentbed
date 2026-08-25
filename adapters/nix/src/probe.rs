@@ -82,8 +82,7 @@ pub fn probe(runner: &dyn CommandRunner) -> Result<ProbeResult, ProbeError> {
 
 fn hex_to_digest(hex: &str) -> Result<Digest, ProbeError> {
     let hex = hex.trim();
-    let hex = if hex.len() > 64 { &hex[..64] } else { hex };
-    if hex.len() != 64 {
+    if hex.len() != 64 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return Err(ProbeError::IncompleteObservation);
     }
     let mut bytes = [0_u8; 32];
@@ -112,7 +111,7 @@ mod tests {
         runner.register(CommandSpec::etc_git_head(), CommandOutput::ok("abc123\n"));
         runner.register(
             CommandSpec::config_digest(),
-            CommandOutput::ok("11".repeat(64)),
+            CommandOutput::ok("11".repeat(32)),
         );
         let result = probe(&runner).expect("probe");
         assert!(result.adapter.resolved);

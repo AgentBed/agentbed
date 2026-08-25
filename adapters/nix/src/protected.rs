@@ -1,6 +1,7 @@
 //! Semantic class-F protected-path rejection before staging.
 
 use agentbed_protocol::wire::ConfigFileChange;
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 /// Why a proposed change was rejected.
@@ -15,21 +16,33 @@ pub enum ProtectedRejectReason {
     Bootloader,
     Firewall,
     StorageLayout,
+    ConflictingChange,
 }
 
 /// Reject any change that would touch a protected resource.
 pub fn check_protected_changes(changes: &[ConfigFileChange]) -> Result<(), ProtectedRejectReason> {
+    let mut seen: HashMap<String, String> = HashMap::new();
     for change in changes {
-        check_one(change)?;
+        let normalized = normalize_path(&change.path);
+        if let Some(existing) = seen.get(&normalized) {
+            if existing != &change.content {
+                return Err(ProtectedRejectReason::ConflictingChange);
+            }
+            continue;
+        }
+        seen.insert(normalized.clone(), change.content.clone());
+        check_one(change, &normalized)?;
     }
     Ok(())
 }
 
-fn check_one(change: &ConfigFileChange) -> Result<(), ProtectedRejectReason> {
-    let normalized = normalize_path(&change.path);
+fn check_one(change: &ConfigFileChange, normalized: &str) -> Result<(), ProtectedRejectReason> {
     let lower = normalized.to_lowercase();
 
-    if lower.contains("watchdogd") {
+    if lower.contains("watchdogd")
+        || lower.contains("agentbed-watchdogd")
+        || lower.contains("/var/lib/agentbed/watchdog")
+    {
         return Err(ProtectedRejectReason::Watchdog);
     }
     if lower.contains("/var/lib/agentbed/wal/") {
@@ -46,6 +59,14 @@ fn check_one(change: &ConfigFileChange) -> Result<(), ProtectedRejectReason> {
     }
 
     let content = change.content.to_lowercase();
+    if content.contains("agentbed-watchdogd")
+        || content.contains("watchdogd.package")
+        || content.contains("watchdogd.enable")
+        || content.contains("services.agentbed-watchdogd")
+        || content.contains("systemd.services.agentbed-watchdogd")
+    {
+        return Err(ProtectedRejectReason::Watchdog);
+    }
     if content.contains("boot.kernelpackages") {
         return Err(ProtectedRejectReason::Kernel);
     }
@@ -55,7 +76,7 @@ fn check_one(change: &ConfigFileChange) -> Result<(), ProtectedRejectReason> {
     if content.contains("networking.firewall") {
         return Err(ProtectedRejectReason::Firewall);
     }
-    if content.contains("filesystems") && content.contains("file") {
+    if content.contains("filesystems.") || content.contains("filesystems =") {
         return Err(ProtectedRejectReason::StorageLayout);
     }
 
@@ -77,4 +98,24 @@ fn normalize_path(path: &str) -> String {
         }
     }
     out.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_identical_paths_are_allowed() {
+        let changes = vec![
+            ConfigFileChange {
+                path: "/etc/nixos/demo.nix".to_owned(),
+                content: "same".to_owned(),
+            },
+            ConfigFileChange {
+                path: "/etc/nixos/demo.nix".to_owned(),
+                content: "same".to_owned(),
+            },
+        ];
+        check_protected_changes(&changes).expect("identical duplicate");
+    }
 }

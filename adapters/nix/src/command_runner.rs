@@ -188,6 +188,19 @@ impl CommandSpec {
         }
     }
 
+    pub fn read_closure_store_path(closure: &str) -> Self {
+        Self {
+            executable: NIX_STORE.to_owned(),
+            argv: vec![
+                NIX_STORE.to_owned(),
+                "--query".to_owned(),
+                "--out-path".to_owned(),
+                closure.to_owned(),
+            ],
+            working_dir: None,
+        }
+    }
+
     pub fn argv_contains(&self, needle: &str) -> bool {
         self.argv.iter().any(|arg| arg.contains(needle))
     }

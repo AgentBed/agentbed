@@ -7,5 +7,12 @@ pub fn pin_closure(
     capture: &CapturedProposal,
 ) -> Result<String, PromotionError> {
     let output = runner.run(&CommandSpec::nix_store_realise(&capture.candidate_closure))?;
-    Ok(output.stdout.trim().to_owned())
+    let realised = output.stdout.trim().to_owned();
+    if realised != capture.candidate_closure {
+        return Err(PromotionError::ClosureMismatch {
+            expected: capture.candidate_closure.clone(),
+            actual: realised,
+        });
+    }
+    Ok(realised)
 }

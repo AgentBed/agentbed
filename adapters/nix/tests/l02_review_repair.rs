@@ -9,9 +9,9 @@
 use agentbed_adapter_nix::capture::CaptureStore;
 use agentbed_adapter_nix::command_runner::{CommandOutput, CommandSpec, FakeCommandRunner};
 use agentbed_adapter_nix::probe;
-use agentbed_adapter_nix::promotion::{pin, readback, test_activation};
-use agentbed_adapter_nix::protected::{self, ProtectedRejectReason};
+use agentbed_adapter_nix::promotion::{pin, readback, test_activation, PromotionError};
 use agentbed_adapter_nix::propose;
+use agentbed_adapter_nix::protected::{self, ProtectedRejectReason};
 use agentbed_protocol::digest::Digest;
 use agentbed_protocol::dto::transaction::BaseRevision;
 use agentbed_protocol::wire::ConfigFileChange;
@@ -131,8 +131,8 @@ fn pin_closure_must_match_captured_candidate() {
         CommandSpec::nix_store_realise(&capture.candidate_closure),
         CommandOutput::ok("/nix/store/other-closure\n"),
     );
-    let pinned = pin::pin_closure(&runner, &capture).expect("pin returns");
-    assert_eq!(pinned, capture.candidate_closure);
+    let err = pin::pin_closure(&runner, &capture).expect_err("mismatch rejected");
+    assert!(matches!(err, PromotionError::ClosureMismatch { .. }));
 }
 
 #[test]
@@ -151,6 +151,10 @@ fn readback_must_query_closure_store_path() {
         CommandSpec::read_closure_hash(pinned),
         CommandOutput::ok("hash-abc\n"),
     );
+    runner.register(
+        CommandSpec::read_closure_store_path(pinned),
+        CommandOutput::ok(&format!("{pinned}\n")),
+    );
     readback::read_agreement(&runner, pinned).expect("readback");
     assert!(
         runner
@@ -163,8 +167,18 @@ fn readback_must_query_closure_store_path() {
 
 #[test]
 fn test_activation_allows_only_once_per_candidate() {
+    test_activation::reset_activation_ledger_for_tests();
     let runner = Arc::new(FakeCommandRunner::new());
     let capture = capture();
+    runner.register(
+        CommandSpec::nix_current_generation(),
+        CommandOutput::ok("42\n"),
+    );
+    runner.register(CommandSpec::etc_git_head(), CommandOutput::ok("abc123\n"));
+    runner.register(
+        CommandSpec::config_digest(),
+        CommandOutput::ok(valid_config_digest_hex()),
+    );
     runner.register(
         CommandSpec::nixos_rebuild_test(&capture),
         CommandOutput::ok("/nix/store/candidate-closure tested\n"),
@@ -175,11 +189,17 @@ fn test_activation_allows_only_once_per_candidate() {
 
 #[test]
 fn test_activation_rejects_moved_base() {
+    test_activation::reset_activation_ledger_for_tests();
     let runner = Arc::new(FakeCommandRunner::new());
     let capture = capture();
     runner.register(
         CommandSpec::nix_current_generation(),
         CommandOutput::ok("99\n"),
+    );
+    runner.register(CommandSpec::etc_git_head(), CommandOutput::ok("abc123\n"));
+    runner.register(
+        CommandSpec::config_digest(),
+        CommandOutput::ok(valid_config_digest_hex()),
     );
     runner.register(
         CommandSpec::nixos_rebuild_test(&capture),
@@ -190,18 +210,13 @@ fn test_activation_rejects_moved_base() {
 
 #[test]
 fn capture_store_must_be_durably_persisted() {
-    let dir = std::env::temp_dir().join(format!(
-        "agb6-capture-durable-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("agb6-capture-durable-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let store = CaptureStore::new(dir.clone());
     let changes = vec![ConfigFileChange {
         path: "/etc/nixos/demo.nix".to_owned(),
         content: "{}".to_owned(),
     }];
-    store
-        .store_active(&capture(), &changes)
-        .expect("store");
+    store.store_active(&capture(), &changes).expect("store");
     assert!(dir.join("active.json.synced").exists());
 }

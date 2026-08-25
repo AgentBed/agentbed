@@ -47,6 +47,7 @@ impl HostAdapter for NixAdapter {
             diff: proposal.diff,
             test_plan: proposal.test_plan,
             affected_resources: proposal.affected_resources,
+            candidate_closure: Some(proposal.capture.candidate_closure),
         })
     }
 }

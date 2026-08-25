@@ -3,7 +3,8 @@
 use crate::propose::CapturedProposal;
 use agentbed_protocol::wire::ConfigFileChange;
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -31,6 +32,10 @@ impl CaptureStore {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn is_durably_persisted(&self) -> bool {
+        self.active_path().with_extension("json.synced").exists()
     }
 
     pub fn load_active(&self) -> Result<Option<StoredCapture>, CaptureError> {
@@ -62,7 +67,18 @@ impl CaptureStore {
         let tmp = self.root.join("active.json.tmp");
         let final_path = self.active_path();
         fs::write(&tmp, raw).map_err(|_| CaptureError::Io)?;
-        fs::rename(tmp, final_path).map_err(|_| CaptureError::Io)
+        sync_path(&tmp)?;
+        fs::rename(&tmp, &final_path).map_err(|_| CaptureError::Io)?;
+        sync_path(&final_path)?;
+        sync_parent(&final_path)?;
+        let marker = final_path.with_extension("json.synced");
+        let mut marker_file = File::create(&marker).map_err(|_| CaptureError::Io)?;
+        marker_file
+            .write_all(b"synced\n")
+            .map_err(|_| CaptureError::Io)?;
+        sync_path(&marker)?;
+        sync_parent(&marker)?;
+        Ok(())
     }
 
     fn active_path(&self) -> PathBuf {
@@ -78,4 +94,20 @@ pub struct StoredCapture {
 
 pub(crate) fn changes_fingerprint(changes: &[ConfigFileChange]) -> String {
     serde_json::to_string(changes).unwrap_or_default()
+}
+
+fn sync_path(path: &Path) -> Result<(), CaptureError> {
+    let file = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|_| CaptureError::Io)?;
+    file.sync_all().map_err(|_| CaptureError::Io)
+}
+
+fn sync_parent(path: &Path) -> Result<(), CaptureError> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let dir = File::open(parent).map_err(|_| CaptureError::Io)?;
+    dir.sync_all().map_err(|_| CaptureError::Io)
 }

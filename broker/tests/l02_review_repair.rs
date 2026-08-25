@@ -45,6 +45,18 @@ fn register_nix_probe(runner: &FakeCommandRunner) {
     );
 }
 
+fn wal_count(dir: &PathBuf) -> usize {
+    let records = dir.join("wal/records");
+    if !records.exists() {
+        return 0;
+    }
+    std::fs::read_dir(records)
+        .expect("records")
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+        .count()
+}
+
 #[test]
 fn nix_propose_wal_records_candidate_closure() {
     let dir = scratch();
@@ -97,5 +109,5 @@ fn nix_propose_rejects_indirect_watchdog_content_without_wal() {
         .config_propose("agent:a", "sha256:abc", &params)
         .expect_err("reject");
     assert!(matches!(err, EngineError::ProposeRejected { .. }));
-    assert!(!dir.join("wal/records").exists());
+    assert_eq!(wal_count(&dir), 0);
 }

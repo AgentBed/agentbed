@@ -22,6 +22,12 @@ pub enum PromotionError {
         boot: String,
         expected: String,
     },
+    ClosureMismatch {
+        expected: String,
+        actual: String,
+    },
+    AlreadyActivated,
+    BaseMoved,
     NotRegistered,
 }
 
