@@ -1,0 +1,22 @@
+command: cargo test -p agentbed-adapter-nix --test l02_review_repair_6
+exit_code: 101
+baseline: fcc4fcd008032fd97203ca7838332a3fe82a6845
+review: 5019682481
+
+running 6 tests
+test boot_rejects_when_profile_not_advanced_to_pin ... FAILED
+test boot_rejects_when_profile_target_missing ... FAILED
+test boot_rejects_when_profile_readback_malformed ... FAILED
+test profile_rejects_post_set_readback_mismatch ... FAILED
+test profile_advances_when_post_set_readback_matches ... FAILED
+test boot_configures_when_profile_matches_pin ... FAILED
+
+failures:
+    boot_rejects_when_profile_not_advanced_to_pin — configure_boot returned Ok; boot invoked without profile verification
+    boot_rejects_when_profile_target_missing — configure_boot returned Ok instead of NotRegistered
+    boot_rejects_when_profile_readback_malformed — configure_boot returned Ok; boot invoked on empty profile
+    profile_rejects_post_set_readback_mismatch — advance_profile returned Ok despite stale readback
+    profile_advances_when_post_set_readback_matches — read_profile_target never invoked after nix-env --set
+    boot_configures_when_profile_matches_pin — profile readback not required before boot
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out
