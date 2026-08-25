@@ -1,7 +1,9 @@
 //! L01 repair tests for native review #5010391942 (PR #20 @ daaaae0).
 //! Review #5011747127 additions cover immutable WAL payload drift, conflicting
 //! `config.propose` retry after idempotency-index faults, and moved-base REJECTED
-//! idempotency ordering. `WalRecord::result_json` is transition-mutable (each
+//! idempotency ordering. Review #5013663187 adds crash-before-retry moved-base
+//! consistency, append-only WAL history, and orphan-event divergence fail-closed.
+//! `WalRecord::result_json` is transition-mutable (each
 //! record carries that transition's serialized outcome) and is excluded from
 //! cross-record immutability checks alongside `seq`, `state`, `idempotency_key`,
 //! and `idem_fingerprint`, which are per-transition metadata rather than tx identity.
@@ -9,7 +11,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use agentbed_broker::adapter::UnresolvedAdapter;
-use agentbed_broker::events::{EventCursor, EventLog, EventRecord};
+use agentbed_broker::events::{EventCursor, EventLog, EventRecord, StoredEvent};
 use agentbed_broker::storage::durability::RealDurability;
 use agentbed_broker::storage::wal::{WalRecord, WalStore};
 use agentbed_broker::transaction::engine::{EngineError, TransactionEngine};
@@ -1396,4 +1398,232 @@ fn moved_base_rejection_after_idempotency_rename_failure_restart_replay() {
 
     let status = engine.tx_status(&tx_id).expect("status");
     assert_eq!(status.state, TransactionState::Rejected);
+}
+
+// --- Review #5013663187: moved-base crash consistency and divergence fail-closed (RED) ---
+
+fn tx_state_event_payload(tx_id: &str, state: &str) -> String {
+    format!(r#"{{"tx_id":"{tx_id}","state":"{state}"}}"#)
+}
+
+fn read_stored_events(state_dir: &Path) -> Vec<StoredEvent> {
+    let log_path = state_dir.join("events/log.jsonl");
+    if !log_path.exists() {
+        return Vec::new();
+    }
+    std::fs::read_to_string(&log_path)
+        .expect("event log")
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_str(line).expect("stored event"))
+        .collect()
+}
+
+fn count_tx_state_events(state_dir: &Path, tx_id: &str, state: &str) -> usize {
+    let expected_payload = tx_state_event_payload(tx_id, state);
+    read_stored_events(state_dir)
+        .into_iter()
+        .filter(|event| event.kind == "tx.state" && event.payload == expected_payload)
+        .count()
+}
+
+fn load_wal_records(state_dir: &Path) -> Vec<WalRecord> {
+    let durability = Arc::new(RealDurability);
+    let store = WalStore::open(state_dir.join("wal"), durability).expect("wal");
+    store.load_records().expect("load")
+}
+
+fn count_wal_rejected_for_tx(state_dir: &Path, tx_id: &str) -> usize {
+    load_wal_records(state_dir)
+        .into_iter()
+        .filter(|record| record.tx_id == tx_id && record.state == TransactionState::Rejected)
+        .count()
+}
+
+fn wal_record_bytes_at_seq(state_dir: &Path, seq: u64) -> Vec<u8> {
+    std::fs::read(
+        state_dir
+            .join("wal/records")
+            .join(format!("{seq}.json")),
+    )
+    .expect("wal record bytes")
+}
+
+fn assert_moved_base_crash_before_retry_consistency(
+    dir: &Path,
+    tx_id: &str,
+    apply_params: &TxApplyParams,
+    inject_fault: impl FnOnce(&Path),
+    clear_fault: impl FnOnce(&Path),
+) {
+    let wal_before = wal_record_count(dir);
+    let events_before = event_count(dir);
+    let records_before = load_wal_records(dir);
+    let testing_record = records_before
+        .iter()
+        .find(|record| record.tx_id == tx_id && record.state == TransactionState::Testing)
+        .expect("testing wal record");
+    let testing_seq = testing_record.seq;
+    let testing_bytes = wal_record_bytes_at_seq(dir, testing_seq);
+    let testing_json = wal_record_to_json(testing_record);
+
+    {
+        let engine = TransactionEngine::open(dir, MovedBaseAdapter).expect("moved");
+        inject_fault(dir);
+        let err = engine
+            .tx_apply("agent:a", "sha256:abc", apply_params)
+            .expect_err("idempotency fault must surface as storage");
+        assert!(matches!(err, EngineError::Storage(_)));
+    }
+
+    clear_fault(dir);
+
+    {
+        let engine = TransactionEngine::open(dir, MovedBaseAdapter).expect("reopen before retry");
+        let status = engine.tx_status(tx_id).expect("status readable after crash");
+        assert_eq!(
+            status.state,
+            TransactionState::Rejected,
+            "tx_status must reflect durable rejection after crash-before-retry"
+        );
+    }
+
+    assert_eq!(
+        count_wal_rejected_for_tx(dir, tx_id),
+        1,
+        "WAL must retain exactly one append-only Rejected transition"
+    );
+    assert_eq!(
+        wal_record_count(dir),
+        wal_before + 1,
+        "WAL must gain one transition without rewriting Testing"
+    );
+    assert_eq!(
+        wal_record_bytes_at_seq(dir, testing_seq),
+        testing_bytes,
+        "Testing WAL record bytes must remain unchanged after failure and restart"
+    );
+    let testing_after = load_wal_records(dir)
+        .into_iter()
+        .find(|record| record.seq == testing_seq)
+        .expect("testing seq");
+    assert_eq!(testing_after.state, TransactionState::Testing);
+    assert_eq!(wal_record_to_json(&testing_after), testing_json);
+
+    assert_eq!(event_count(dir), events_before + 1);
+    assert_eq!(count_tx_state_events(dir, tx_id, "Rejected"), 1);
+
+    let wal_after_crash = wal_record_count(dir);
+    let events_after_crash = event_count(dir);
+    {
+        let engine = TransactionEngine::open(dir, MovedBaseAdapter).expect("retry");
+        let err = engine
+            .tx_apply("agent:a", "sha256:abc", apply_params)
+            .expect_err("replay refusal");
+        assert!(matches!(err, EngineError::BaseRevisionMoved));
+    }
+
+    assert_eq!(
+        wal_record_count(dir),
+        wal_after_crash,
+        "retry must not add or replace WAL records"
+    );
+    assert_eq!(
+        wal_record_bytes_at_seq(dir, testing_seq),
+        testing_bytes,
+        "retry must not rewrite Testing WAL in place"
+    );
+    assert_eq!(
+        event_count(dir),
+        events_after_crash,
+        "retry must not append duplicate rejection events"
+    );
+
+    {
+        let engine = TransactionEngine::open(dir, MovedBaseAdapter).expect("final reopen");
+        let status = engine.tx_status(tx_id).expect("status after final reopen");
+        assert_eq!(status.state, TransactionState::Rejected);
+        let err = engine
+            .tx_apply("agent:a", "sha256:abc", apply_params)
+            .expect_err("persistent refusal after final reopen");
+        assert!(matches!(err, EngineError::BaseRevisionMoved));
+    }
+    assert_eq!(count_wal_rejected_for_tx(dir, tx_id), 1);
+    assert_eq!(wal_record_bytes_at_seq(dir, testing_seq), testing_bytes);
+}
+
+#[test]
+fn moved_base_apply_idempotency_write_failure_crash_before_retry_consistency() {
+    let dir = scratch();
+    let apply_key = "crash-write-consistency";
+    let (tx_id, apply_params) = setup_moved_base_apply(&dir, apply_key);
+    let idem_dir = dir.join("idempotency");
+
+    assert_moved_base_crash_before_retry_consistency(
+        &dir,
+        &tx_id,
+        &apply_params,
+        |dir| set_path_readonly(&dir.join("idempotency"), true),
+        |_| set_path_readonly(&idem_dir, false),
+    );
+}
+
+#[test]
+fn moved_base_apply_idempotency_rename_failure_crash_before_retry_consistency() {
+    let dir = scratch();
+    let apply_key = "crash-rename-consistency";
+    let (tx_id, apply_params) = setup_moved_base_apply(&dir, apply_key);
+    let blocker = idempotency_binding_path(&dir, "agent:a", "tx.apply", apply_key);
+
+    assert_moved_base_crash_before_retry_consistency(
+        &dir,
+        &tx_id,
+        &apply_params,
+        |_| std::fs::create_dir_all(&blocker).expect("rename blocker"),
+        |_| std::fs::remove_dir_all(&blocker).expect("clear blocker"),
+    );
+}
+
+#[test]
+fn orphan_rejected_event_without_wal_transition_enters_safe_mode() {
+    let dir = scratch();
+    let tx_id = {
+        let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("open");
+        let propose = engine
+            .config_propose(
+                "agent:a",
+                "sha256:abc",
+                &propose_params("orphan-event-propose", "/etc/nixos/configuration.nix"),
+            )
+            .expect("propose");
+        engine
+            .tx_test(
+                "agent:a",
+                "sha256:abc",
+                &TxTestParams {
+                    tx_id: tx(&propose.tx_id),
+                },
+            )
+            .expect("test");
+        propose.tx_id
+    };
+
+    assert_eq!(count_wal_rejected_for_tx(&dir, &tx_id), 0);
+
+    let log = EventLog::open(dir.join("events")).expect("events");
+    log.append(EventRecord {
+        kind: "tx.state".to_owned(),
+        payload: tx_state_event_payload(&tx_id, "Rejected"),
+    })
+    .expect("orphan rejected event");
+
+    let engine = TransactionEngine::open(&dir, UnresolvedAdapter).expect("reopen");
+    let err = engine
+        .config_propose(
+            "agent:a",
+            "sha256:abc",
+            &propose_params("after-orphan-rejected-event", "/etc/nixos/configuration.nix"),
+        )
+        .expect_err("event/WAL divergence must enter safe mode");
+    assert!(matches!(err, EngineError::SafeMode));
 }
