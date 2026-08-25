@@ -1,0 +1,30 @@
+# AGB-6 review-repair RED evidence (review #5014581086 @ f2cd4f428b342e2bace368400c9923899b9dcb49)
+
+Commands executed bare and unpiped against unchanged GREEN head before repair production edits.
+
+```bash
+cargo test -p agentbed-adapter-nix --test l02_review_repair
+```
+
+Exit code: 101 (9 failed, 1 passed)
+
+Failures (causal):
+- `protected_rejects_indirect_watchdog_package_content` — indirect watchdog Nix content not rejected
+- `protected_rejects_watchdog_unit_and_state_paths` — watchdog unit/state paths not rejected
+- `protected_rejects_duplicate_conflicting_changes` — duplicate path conflicts not rejected
+- `probe_rejects_overlong_digest` — 128-char digest accepted (truncated)
+- `pin_closure_must_match_captured_candidate` — mismatched realise output accepted
+- `readback_must_query_closure_store_path` — closure store path not queried
+- `test_activation_allows_only_once_per_candidate` — second activation allowed
+- `test_activation_rejects_moved_base` — moved base not detected
+- `capture_store_must_be_durably_persisted` — no durable sync marker written
+
+```bash
+cargo test -p agentbed-broker --test l02_review_repair
+```
+
+Exit code: 101 (2 failed)
+
+Failures (causal):
+- `nix_propose_wal_records_candidate_closure` — WAL result_json lacks candidate closure
+- `nix_propose_rejects_indirect_watchdog_content_without_wal` — indirect watchdog content staged with WAL side effects

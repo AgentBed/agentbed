@@ -22,6 +22,7 @@ use agentbed_protocol::wire::{
     ConfigProposeParams, EffectClass, EventsReplayResult, StoredEventWire, TxApplyParams,
     TxStatusParams, TxTestParams,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -36,6 +37,7 @@ pub enum EngineError {
     BaseRevisionMoved,
     OwnershipMismatch,
     WatchdogAuthorityRequired,
+    ProposeRejected { reason: String },
     Storage(DurabilityError),
 }
 
@@ -48,6 +50,14 @@ pub struct ConfigProposeOutcome {
     pub affected_resources: Vec<String>,
     pub base_revision: BaseRevision,
     pub state: WireState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WalConfigProposePayload {
+    #[serde(flatten)]
+    result: ConfigProposeResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    candidate_closure: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,24 +204,28 @@ impl TransactionEngine {
         let digest: Digest = parse_manifest_digest(manifest_digest);
         let base_revision = self.adapter.current_base_revision();
         let tx_id = new_tx_id();
-        let diff = params
-            .changes
-            .iter()
-            .map(|c| format!("{} => staged", c.path))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let affected_resources = vec!["root_config".to_owned()];
+        let staged = self
+            .adapter
+            .propose_config(&params.changes)
+            .map_err(|err| match err {
+                crate::adapter::AdapterProposeError::Rejected(reason) => {
+                    EngineError::ProposeRejected { reason }
+                }
+            })?;
+        let diff = staged.diff;
+        let affected_resources = staged.affected_resources;
         let wire_result = ConfigProposeResult {
             tx_id: tx_id.clone(),
             diff: diff.clone(),
-            test_plan: TestPlan {
-                adapter: "unresolved".to_owned(),
-                steps: vec!["noop-test".to_owned()],
-            },
+            test_plan: staged.test_plan.clone(),
             affected_resources: affected_resources.clone(),
             base_revision: base_revision.clone(),
         };
-        let result_json = serde_json::to_string(&wire_result).map_err(|_| EngineError::SafeMode)?;
+        let wal_payload = WalConfigProposePayload {
+            result: wire_result.clone(),
+            candidate_closure: staged.candidate_closure.clone(),
+        };
+        let result_json = serde_json::to_string(&wal_payload).map_err(|_| EngineError::SafeMode)?;
         let seq = self.persist_transition(
             &tx_id,
             WireState::Proposed,
@@ -686,8 +700,12 @@ fn parse_manifest_digest(manifest_digest: &str) -> Digest {
 }
 
 fn replay_propose(entry: &IdempotencyRecord) -> Result<ConfigProposeOutcome, EngineError> {
-    let result: ConfigProposeResult =
-        serde_json::from_str(&entry.result_json).map_err(|_| EngineError::IdempotencyConflict)?;
+    let result = serde_json::from_str::<WalConfigProposePayload>(&entry.result_json)
+        .map(|payload| payload.result)
+        .or_else(|_| {
+            serde_json::from_str::<ConfigProposeResult>(&entry.result_json)
+                .map_err(|_| EngineError::IdempotencyConflict)
+        })?;
     Ok(ConfigProposeOutcome {
         tx_id: result.tx_id,
         diff: result.diff,

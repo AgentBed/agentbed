@@ -1,0 +1,27 @@
+command: cargo test -p agentbed-adapter-nix --test l02_review_repair_4
+exit_code: 101
+baseline: 9f882a40e80aeeb8ec6b92969aae03032284642e
+review: 5019424546
+
+   Compiling agentbed-adapter-nix v0.0.1 (/home/lpbaril/multica_workspaces/19516347-f19e-44b5-a3d4-77a551fa4fb4/b35ed7ece21a/workdir/agentbed/adapters/nix)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/l02_review_repair_4.rs (target/debug/deps/l02_review_repair_4-d1efbc427ade054d)
+
+running 8 tests
+test protected_allows_fully_quoted_kernel_decoy_as_value ... ok
+test protected_allows_fully_quoted_kernel_decoy_in_comment ... ok
+test protected_rejects_dynamic_fully_quoted_attrpath ... ok
+test protected_rejects_fully_quoted_boot_kernel_attrpath ... FAILED
+test protected_rejects_fully_quoted_boot_loader_grub_attrpath ... FAILED
+test protected_rejects_fully_quoted_networking_firewall_attrpath ... FAILED
+test protected_rejects_mixed_quoted_unquoted_kernel_attrpath ... FAILED
+test activation_skips_probe_when_root_parent_fsync_fails ... FAILED
+
+failures:
+    protected_rejects_fully_quoted_boot_kernel_attrpath
+    protected_rejects_fully_quoted_boot_loader_grub_attrpath
+    protected_rejects_fully_quoted_networking_firewall_attrpath
+    protected_rejects_mixed_quoted_unquoted_kernel_attrpath
+    activation_skips_probe_when_root_parent_fsync_fails
+
+test result: FAILED. 3 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out

@@ -47,6 +47,7 @@ pub mod host;
 pub mod identity;
 pub mod jcs;
 pub mod manifest;
+pub mod nix_host_adapter;
 pub mod observability;
 pub mod peercred;
 pub mod policy;

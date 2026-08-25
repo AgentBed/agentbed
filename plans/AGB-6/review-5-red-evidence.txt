@@ -1,0 +1,14 @@
+command: cargo test -p agentbed-adapter-nix --test l02_review_repair_5
+exit_code: 101
+baseline: e582ec2cc17628fbbde71ab0dbf71c399c213423
+review: 5019548471
+
+running 2 tests
+test result_md_maps_all_l02_acceptance_ids_in_traceability_table ... FAILED
+test activation_skips_probe_when_interrupted_creator_left_activations_without_root_sync ... FAILED
+
+failures:
+    result_md_maps_all_l02_acceptance_ids_in_traceability_table — missing **L02-AC01** row
+    activation_skips_probe_when_interrupted_creator_left_activations_without_root_sync — expected ReservationNotDurable, got Ok(())
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out

@@ -1,9 +1,15 @@
-//! `agentbed-adapter-nix` — **Gate 1 stub, intentionally empty.**
-//!
-//! The Nix adapter (`config.propose`, `tx.*` over `nixos-rebuild test`, and a
-//! resolved safety vector reporting `generation` for `root_config`/`packages`)
-//! lands at Gate 1 (`docs/roadmap.md`).
-//!
-//! At Gate 0 the broker uses its built-in **unresolved** adapter, which
-//! resolves nothing and therefore reports `none` for every resource
-//! (`docs/effects.md` §2). See `broker/src/adapter.rs`.
+//! Gate 1 Nix host adapter — probe, propose, and promotion primitives.
+
+#![allow(
+    clippy::must_use_candidate,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
+
+pub mod adapter;
+pub mod capture;
+pub mod command_runner;
+pub mod probe;
+pub mod promotion;
+pub mod propose;
+pub mod protected;
