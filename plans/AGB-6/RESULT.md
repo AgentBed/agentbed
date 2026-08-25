@@ -34,7 +34,7 @@
 - Review-4 RED: `9809fda9d2155db49974afa687c1fa8738ec539e` — `plans/AGB-6/review-4-red-evidence.txt`
 - Review-4 GREEN: `e582ec2cc17628fbbde71ab0dbf71c399c213423`
 - Review-5 RED: `2ef152a62d91ccb8e6987099c612ed5ae8bbfd39` — `plans/AGB-6/review-5-red-evidence.txt`
-- Review-5 GREEN: see PR head
+- Review-5 GREEN: `86948e878f36860a07df5883ff335e0453efe82b`
 
 ## Review repair #5019548471 — addressed findings
 
