@@ -20,6 +20,7 @@ This lane implements **watchdog-only durable authority** and the narrow authenti
 3. **Single writer.** Only watchdog-owned code appends decision-log records (`ARMED`, `PROBATION_PASSED`, `BEGIN_COMMIT`, `BEGIN_REVERT`, `COMMITTED`, `REVERTED`). Broker crates hold request/response types and RPC client stubs only — no append API, no epoch allocation, no invariant evaluation, no terminal-state selection.
 4. **Process independence, not hostile-root boundary.** Permission/ownership checks and transaction self-protection are real; a malicious root can still alter watchdog files. OOB is the backstop (H-02/H-05, L05+). L03 must state this honestly (L03-AC10).
 5. **External epoch floor is injected only.** L03 provides the outside-domain epoch-store abstraction and an injectable external-floor interface for hermetic mismatch tests. It does not implement OOB mirror placement, signing, or live rollback detection against an external store.
+6. **Session bootstrap is mandatory and non-authority.** `SessionBind`/`SessionEstablished` precede all five production request types; capability is never persisted or logged; reconnect requires exact durable-state match.
 
 ### Hard non-goals (L03-AC12)
 
@@ -63,7 +64,7 @@ Nix protected-resource matrix must semantically reject watchdog root, runtime/co
 
 **Fail-closed triggers:** checksum/frame/sequence/hash/epoch inconsistency; partial tail; truncation; missing expected file; ambiguous temp file; local epoch high-water rolled back below maximum epoch observed in the decision log or below the injected external floor; external floor unavailable or ambiguous; failed fsync/rename/readback; unavailable storage. No auto-truncation, best-effort continuation, or default epoch.
 
-**RPC refusal without new authority record:** stale epoch; unknown transaction; duplicate/conflicting request; moved base; expired lease; malformed/oversized frame; authentication failure; corrupt log; ambiguous state.
+**RPC refusal without new authority record:** stale epoch; unknown transaction; duplicate/conflicting request; moved base; expired lease; malformed/oversized frame; bad frame CRC or payload length; deny-unknown JSON; authentication failure; `SessionBind` stale/conflicting binding; capability/counter/request-response binding mismatch; corrupt log; ambiguous state.
 
 ### Ownership and update boundary
 
@@ -104,9 +105,9 @@ watchdogd/src/
     safe_mode.rs        — durable marker + in-memory latch when persist unavailable (L03-AC03)
     durability.rs       — shared temp/rename/fsync/readback helpers
   rpc/
-    protocol.rs         — sealed local wire DTOs, versioned frame schema, deny-unknown (L03-AC04)
-    server.rs           — Unix listener, deadlines, response binding (L03-AC04)
-  auth.rs               — SO_PEERCRED + connection capability + counter binding (L03-AC04, AC07)
+    protocol.rs         — sealed wire DTOs, FrameCodec (length/CRC/JSON), SessionBind bootstrap, deny-unknown (L03-AC04)
+    server.rs           — Unix listener, SessionBind→SessionEstablished, deadlines, response binding (L03-AC04)
+  auth.rs               — SO_PEERCRED + SessionEstablished capability mint/validation + counter binding (L03-AC04, AC07)
   arming.rs             — invariant set validation, immutable capture (L03-AC05)
   authority.rs          — sole BEGIN_* selection from watchdog-owned evaluation (L03-AC06)
   lease.rs              — renewable lease + heartbeat/progress (L03-AC07)
@@ -131,18 +132,18 @@ Wire DTOs live exclusively in `watchdogd/src/rpc/protocol.rs`. The broker client
 ### Narrow authenticated local RPC (broker ↔ watchdog)
 
 - Transport: Unix socket at `/run/agentbed/watchdog/watchdog.sock` (volatile; tests use temp paths). Socket directory `root:root` mode `0700`; socket `root:root` mode `0600`.
+- **Frame codec (normal server/client transport primitive):** every wire message uses `encode_frame` / `decode_frame` (or equivalent `FrameCodec`) — not a test helper. On the wire: `u32` big-endian payload length (maximum applies to payload length only), `u32` CRC32 of the payload, then UTF-8 JSON payload. The JSON envelope includes a protocol version field and is deserialized with strict deny-unknown semantics. Typed `encode_request` / `decode_request` and response equivalents build on this codec; RED may construct valid adverse frames by mutating encoded frame bytes (length/CRC/payload) without any test-only production API.
 - **Local process authentication** (not OOB signing, not a hostile-root boundary):
-  1. Server derives peer identity from `SO_PEERCRED` and verifies it matches the exact configured broker peer `{uid, gid}` from `watchdog.json`.
-  2. After peer verification, the watchdog mints an entropy-backed 256-bit **connection capability** bound to `{pid, uid, gid, host_id, tx_id, epoch, lease_id, process_group}` plus a monotonically increasing request/heartbeat counter for that connection.
-  3. Capability is connection/daemon-lifetime only: never persisted, never logged, never provisioned to callers as a durable credential, invalid after reconnect or daemon restart.
-  4. Every request and response is gated by strict peer identity + capability + counter/request binding; replay, wrong peer, or wrong binding fails closed.
-- Framing: bounded length-prefixed frames; version field; strict schema; deny-unknown fields. Sealed wire DTOs in `watchdogd/src/rpc/protocol.rs`.
-- Production request types (broker → watchdog): `Arm`, `ReportHealth`, `RequestLeaseRenewal`, `Heartbeat`, `RequestDecision`.
+  1. Server derives peer identity from `SO_PEERCRED` and verifies it matches the exact configured broker peer `{uid, gid}` from `watchdog.json`. Wrong peer is refused before any handler.
+  2. **Session bootstrap (non-authority control exchange, mandatory before the five production request types):** after peer verification, the client sends a bounded strict `SessionBind` control envelope carrying **only** `{host_id, tx_id, epoch, lease_id, process_group, client_nonce}`. The watchdog validates that binding against durable/current state (new transaction or exact reconnect), mints an entropy-backed 256-bit capability bound to peer `{pid, uid, gid}` plus those fields, and returns `SessionEstablished {capability, server_nonce, counter=0}`. This control exchange cannot carry health/invariant/decision/terminal/path/signal inputs and **cannot append authority records**. It is **not** a sixth authority request, **not** `Disarm`, and **not** OOB.
+  3. **Post-bootstrap binding:** every one of the five production request envelopes and every response carries and validates the exact capability, request ID, host/tx/epoch binding, and strictly monotonic counter. Old capabilities die on reconnect or daemon restart. A reconnect may establish a new capability only when `SessionBind` exactly matches reconstructed durable state; unknown/stale/conflicting bindings fail closed with **no new authority record**.
+  4. Capability is connection/daemon-lifetime only: never persisted, never logged, never provisioned to callers as a durable credential.
+- **Production authority request types (broker → watchdog, post-bootstrap only):** exactly five — `Arm`, `ReportHealth`, `RequestLeaseRenewal`, `Heartbeat`, `RequestDecision`. No sixth authority type, no `Disarm`, no OOB handshake.
 - **No production `Disarm` or admin hook.** No caller-visible RPC may disarm, clear safe mode, or choose terminal authority. Test helpers that simulate disarm or safe-mode clear are non-wire, test-only, and not part of the production protocol.
 - **Watchdog-owned evaluation:**
   - `ReportHealth` — advisory progress only; carries no invariant result, decision, terminal state, epoch choice, path, or signal target. Broker-supplied health hints cannot override watchdog-owned invariant, lease, or fencing evidence.
   - `RequestDecision` — trigger only; carries no health result, invariant result, decision, terminal state, epoch choice, path, or signal target. The watchdog independently reads/evaluates mandatory invariants (via injected `invariants` interface), its own clock, and lease state before durably choosing `BEGIN_COMMIT` or `BEGIN_REVERT`.
-- Forbidden caller inputs on all requests: log record bodies; epoch choice; invariant evaluation results presented as authority; terminal state; filesystem paths; signal targets; `BEGIN_*` selection; any field that would let the broker override watchdog-owned invariant/lease/fencing evidence.
+- Forbidden caller inputs on all post-bootstrap requests: log record bodies; epoch choice; invariant evaluation results presented as authority; terminal state; filesystem paths; signal targets; `BEGIN_*` selection; any field that would let the broker override watchdog-owned invariant/lease/fencing evidence.
 - Duplicate/conflicting requests are strictly rejected with **no new authority record**.
 - Response binding: each response carries `{request_id, host_id, tx_id, epoch}` plus capability/counter binding; replays/duplicates fail closed.
 - Uniform errors: no partial durable side effects on refusal.
@@ -158,7 +159,7 @@ Validate and durably record `{host_id, tx_id, epoch, immutable base, deadline, m
 
 Bounded renewable lease bound to `{host_id, tx_id, epoch, lease_id, process_group, deadline}`:
 
-- Authenticated local heartbeat/progress messages gated by connection capability + counter binding; deterministic clock, entropy, and authenticator fakes.
+- Authenticated local heartbeat/progress messages gated by post-bootstrap `SessionEstablished` capability + strictly monotonic counter binding; deterministic clock, entropy, and authenticator fakes.
 - Replays, wrong binding, clock regression, late renewal, liveness ambiguity → fail closed.
 - Local process authentication only — not OOB signing, not a hostile-root boundary. Production OOB signing remains blocked on H-02.
 
@@ -182,12 +183,12 @@ Failure to signal, wait, prove exit, or prove zero jobs → safe mode / refusal.
 | **L03-AC01** | `watchdogd/topology.rs`, `adapters/nix/protected.rs`, `broker/tests/l03_topology.rs` (planned) | Hermetic topology fakes: exact mount point, distinct device/mount ID, no fallback, startup refusal matrix; broker/state WAL path protected alongside `/wal/` alias; permissions/ownership/symlink rejection; no live mount/install |
 | **L03-AC02** | `watchdogd/storage/decision_log.rs`, `broker/src/watchdog/client.rs` | Only watchdog crate can append authority records; broker client has no decision-record constructor/append API; single-writer framing; monotonic sequence/epoch binding; file fsync before response; creation parent fsync; corruption/truncation refusal tests |
 | **L03-AC03** | `watchdogd/storage/{epoch,safe_mode}.rs` | Atomic replacement protocol; monotonic allocation/refusal; decision-log cross-check; injected external-floor mismatch; durable safe-mode marker with in-memory latch when persist unavailable; fail-closed for missing/stale/rolled-back/corrupt/ambiguous/unavailable storage; no external/OOB implementation |
-| **L03-AC04** | `watchdogd/src/rpc/{protocol,server}.rs`, `watchdogd/auth.rs`, `broker/src/watchdog/client.rs` | Bounded versioned Unix protocol; sealed wire DTOs in `protocol.rs`; SO_PEERCRED + connection capability + counter binding; deny-unknown; request/response binding; replay/duplicate handling; deadlines; uniform fail-closed errors; no `Disarm` on wire; forbidden-field rejection matrix |
+| **L03-AC04** | `watchdogd/src/rpc/{protocol,server}.rs`, `watchdogd/auth.rs`, `broker/src/watchdog/client.rs` | Bounded Unix protocol with sealed `FrameCodec` (`u32` BE length + `u32` CRC32 + versioned UTF-8 JSON, deny-unknown, payload-length max); SO_PEERCRED refusal; mandatory `SessionBind`→`SessionEstablished` bootstrap before the five authority requests; capability + request ID + host/tx/epoch + monotonic counter on every post-bootstrap request/response; stale reconnect/conflicting binding refusal; bad length/CRC/version; syntactically valid JSON unknown field through normal codec; real socket flow `connect → bootstrap → authenticated Arm → bound response`; no `Disarm`/OOB on wire; no persisted/logged capability |
 | **L03-AC05** | `watchdogd/arming.rs`, `watchdogd/invariants.rs` | Arming validation matrix: moved base, wrong epoch, duplicate/conflicting arming (no new authority record), weakened mandatory invariants, expired deadline, ambiguity; additive manifest-only strictness |
 | **L03-AC06** | `watchdogd/authority.rs`, `broker/transaction/recovery.rs` (existing safe-mode on watchdog WAL) | Only watchdog selects `BEGIN_COMMIT`/`BEGIN_REVERT` from its own invariant/clock/lease evaluation; broker-supplied observations cannot override watchdog-owned evidence; duplicate/stale/unknown/malformed/moved-base/wrong-epoch/expired-lease/corrupt-log/ambiguous requests cannot cause or override decision; broker WAL with watchdog-owned states still fails closed |
 | **L03-AC07** | `watchdogd/lease.rs`, `watchdogd/auth.rs` | Lease renewal/expiry; heartbeat capability+counter binding; clock regression/replay/wrong-binding tests with deterministic fakes; local process auth only; production OOB signing not claimed |
 | **L03-AC08** | `watchdogd/fencing.rs`, `watchdogd/fakes/{process,job}.rs`, `watchdogd/tests/fencing_fixture.rs` | SIGTERM→wait→SIGKILL→group exit→zero jobs ordering; bounded spawned-fixture test; failure injection keeps safe mode; no overlap with revert |
-| **L03-AC09** | `watchdogd/tests/l03_failure_matrix.rs` (planned) | Hermetic matrix: corrupt/truncated log; epoch rollback/mismatch; stale/malformed/duplicate/unknown RPC; moved base; wrong epoch; expired lease; stopped heartbeat; process survivor; job survivor; every fsync/rename/readback boundary; unavailable store; restart reconstruction; safe-mode persistence |
+| **L03-AC09** | `watchdogd/tests/l03_failure_matrix.rs` (planned) | Hermetic matrix: corrupt/truncated log; epoch rollback/mismatch; stale/malformed/duplicate/unknown RPC; `SessionBind` stale reconnect; capability/counter/binding mismatch; bad frame length/CRC/version; deny-unknown JSON via frame codec; moved base; wrong epoch; expired lease; stopped heartbeat; process survivor; job survivor; every fsync/rename/readback boundary; unavailable store; restart reconstruction; safe-mode persistence |
 | **L03-AC10** | `watchdogd/interfaces.rs`, `watchdogd/fakes/`, PLAN non-goals §1 | All externals injected; tests need no root/NixOS/systemd/Proxmox/credentials; explicit statement: no hostile-root boundary, no Gate 1 exit evidence |
 | **L03-AC11** | `plans/AGB-8/{PLAN,RESULT,red-evidence}.md` | PLAN before production; RED tests/fixtures only against unchanged production; focused RED bare/unpiped with causal non-zero output; smallest GREEN; RESULT with exact current-head commands; DCO on every commit |
 | **L03-AC12** | PLAN §1 non-goals | Review + static checks prove no L04/L05/live install/OOB/credentials/router changes in this lane |
@@ -209,9 +210,16 @@ Failure to signal, wait, prove exit, or prove zero jobs → safe mode / refusal.
 | Moved base | Changed base revision on re-arm | Refused before `ARMED` |
 | Weakened mandatory invariant | Remove default invariant from set | Refused before `ARMED` |
 | Expired arming deadline | Clock fake past deadline | Refused / `BEGIN_REVERT` path only via watchdog evaluation |
-| Malformed/oversized frame | Bad length/CRC/version | Uniform error; no durable append |
-| Peercred mismatch | Wrong uid on socket | Refused before handler |
-| Replay request_id | Duplicate RPC with same binding | Fail closed |
+| Malformed/oversized frame | Bad payload length, CRC mismatch, or protocol version | Uniform error via `decode_frame`; no durable append |
+| Deny-unknown JSON field | Syntactically valid frame with unknown JSON field re-encoded through normal `FrameCodec` | `DenyUnknown`; no handler side effects |
+| Peercred mismatch | Wrong `{uid,gid}` on socket | Refused before `SessionBind` or any handler |
+| SessionBind stale/conflicting binding | Reconnect with binding that does not match reconstructed durable state | Fail closed; no `SessionEstablished`; no authority record |
+| SessionBind success | Valid peer + binding against durable state | `SessionEstablished {capability, server_nonce, counter=0}`; no authority record |
+| Post-bootstrap capability mismatch | Wrong/stale capability on any of the five request types | Fail closed; no authority record |
+| Post-bootstrap counter replay | Duplicate counter with same capability | Fail closed; no authority record |
+| Response binding mismatch | Response capability/counter/request ID does not match request | Fail closed on decode |
+| Unix socket authenticated flow | `connect → SessionBind → SessionEstablished → Arm → bound response` | Full codec path; `ARMED` only after valid bootstrap + bound post-bootstrap exchange |
+| Stale epoch on RPC | Reuse old epoch after increment | Fail closed; no new authority record |
 | Heartbeat wrong lease binding | Mismatched `lease_id`/`process_group` | Fail closed |
 | Clock regression | Decrease fake clock on renewal | Fail closed |
 | Lease expiry with live worker | Process fake survives SIGTERM | Safe mode; no `BEGIN_*` until fenced |
@@ -245,6 +253,25 @@ cargo test -p agentbed-adapter-nix -- protected_broker_state
 ```
 
 RED checkpoint: execute focused suites against **unchanged** production (`watchdogd` stub); preserve unpiped causal non-zero output in `plans/AGB-8/red-evidence.txt`.
+
+### Named RED tests and evidence expectations (L03-AC04 subset)
+
+RED must name discriminating tests (in `watchdogd/tests/l03_red.rs`, `broker/tests/l03_watchdog_client.rs`, and evidence) covering at minimum:
+
+| Test theme | Expected RED behavior |
+|---|---|
+| `l03_ac04_peercred_refused_before_session_bind` | Wrong peer refused at `SO_PEERCRED`; no `SessionEstablished` |
+| `l03_ac04_session_bind_establishes_capability` | Valid `SessionBind` → `SessionEstablished {counter=0}`; no authority record |
+| `l03_ac04_session_bind_stale_reconnect_refused` | Reconnect with binding mismatch vs durable state fails closed |
+| `l03_ac04_frame_codec_bad_length_crc_version` | `decode_frame` rejects bad payload length, CRC mismatch, unknown version |
+| `l03_ac04_deny_unknown_json_field_via_frame_codec` | Valid length/CRC frame with unknown JSON field → `DenyUnknown` |
+| `l03_ac04_capability_counter_binding_refused` | Post-bootstrap request with wrong capability/counter/request binding fails closed |
+| `l03_ac04_response_binding_mismatch_refused` | `decode_response` rejects capability/counter/request mismatch |
+| `l03_ac04_unix_socket_connect_bootstrap_arm_round_trip` | Real `UnixStream::connect` → `SessionBind` → `SessionEstablished` → authenticated `Arm` → bound response via normal `encode_frame`/`decode_frame` |
+| `l03_ac04_request_kinds_round_trip_through_codec` | Each of the five authority request types encodes/decodes through normal typed + frame codec surfaces |
+| `l03_ac04_protocol_source_excludes_disarm_oob` | Static source check: no `Disarm`, no `OobHandshake` |
+
+Tests construct adverse frames by mutating `encode_frame` output in test-local helpers only; production exposes `encode_frame`/`decode_frame` as normal transport primitives, not test-only conveniences.
 
 ## 7. Rollback and stop conditions
 
