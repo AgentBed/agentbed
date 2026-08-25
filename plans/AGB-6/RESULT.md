@@ -9,36 +9,24 @@
 
 | AC | Evidence |
 |---|---|
-| **L02-AC01** | `adapters/nix/probe.rs`, `adapters/nix/adapter.rs`, `broker/src/nix_host_adapter.rs`; `adapters/nix/tests/l02_adapter.rs` (`probe_reports_generation_only_when_verified`, `probe_refuses_when_generation_missing`, `nix_adapter_host_surface_matches_probe`). |
-| **L02-AC02** | `adapters/nix/protected.rs`, `broker/src/nix_host_adapter.rs`; `adapters/nix/tests/l02_adapter.rs` (`protected_path_matrix_rejects_class_f_before_staging`), `adapters/nix/tests/l02_review_repair.rs`, `adapters/nix/tests/l02_review_repair_2.rs` (structural nested kernel/bootloader), `adapters/nix/tests/l02_review_repair_3.rs` (quoted/dynamic Class-F), `broker/tests/l02_review_repair.rs`, `broker/tests/l02_review_repair_2.rs`. |
-| **L02-AC03** | `adapters/nix/{capture,propose}.rs`, `broker/src/nix_host_adapter.rs`, `broker/src/transaction/engine.rs`; `adapters/nix/tests/l02_adapter.rs`, `broker/tests/l02_nix_adapter.rs`, `broker/tests/l02_review_repair.rs` (internal WAL closure), `broker/tests/l02_review_repair_2.rs` (schema + WAL). |
-| **L02-AC04** | `adapters/nix/command_runner.rs`; `adapters/nix/tests/l02_adapter.rs` (`fake_runner_never_invokes_live_nixos_rebuild`), `adapters/nix/tests/l02_review_repair_2.rs` (env/stdin/timeout policies). |
-| **L02-AC05** | `adapters/nix/promotion/{build,test_activation}.rs`, `adapters/nix/capture.rs`; `adapters/nix/tests/l02_adapter.rs`, `adapters/nix/tests/l02_review_repair.rs`, `adapters/nix/tests/l02_review_repair_2.rs`, `adapters/nix/tests/l02_review_repair_3.rs` (fsync-before-invocation). |
-| **L02-AC06** | `adapters/nix/promotion/{pin,profile}.rs`, `adapters/nix/capture.rs`; `adapters/nix/tests/l02_adapter.rs` (`promotion_pin_profile_boot_flush_readback_happy_path`), `adapters/nix/tests/l02_review_repair.rs`, `adapters/nix/tests/l02_review_repair_3.rs` (durable pin authority). |
-| **L02-AC07** | `adapters/nix/promotion/{boot,flush,readback}.rs`; `adapters/nix/tests/l02_adapter.rs`, `adapters/nix/tests/l02_review_repair.rs`, `adapters/nix/tests/l02_review_repair_2.rs`, `adapters/nix/tests/l02_review_repair_3.rs` (boot requires verified pin). |
-| **L02-AC08** | `adapters/nix/promotion/`, `broker/tests/l02_nix_adapter.rs`; `adapters/nix/tests/l02_adapter.rs` (`promotion_failures_are_explicit_at_each_boundary`, `promotion_module_has_no_forbidden_switch_commands`). |
-| **L02-AC09** | `plans/AGB-6/{PLAN,red-evidence,review-red-evidence,review-2-red-evidence,review-3-red-evidence,RESULT}.md`; verification commands below — all PASS on review-3 GREEN head. |
-| **L02-AC10** | PLAN non-goals; hermetic `FakeCommandRunner` only; no live `nixos-rebuild`/profile/boot/systemd execution paths in production defaults. |
+| **L02-AC02** | `adapters/nix/protected.rs`; `adapters/nix/tests/l02_review_repair_3.rs`, `adapters/nix/tests/l02_review_repair_4.rs` (fully quoted attrpaths, decoys). |
+| **L02-AC05** | `adapters/nix/capture.rs`, `adapters/nix/promotion/test_activation.rs`; `adapters/nix/tests/l02_review_repair_4.rs` (root parent fsync before activation). |
+| **L02-AC09** | `plans/AGB-6/review-4-red-evidence.txt`, verification commands below — all PASS on review-4 GREEN head. |
+
+(Full L02-AC01…L02-AC10 traceability retained from prior review cycles in branch history.)
 
 ## RED→GREEN evidence (L02-AC09)
 
-- PLAN: `747b612d702080bfd8836aa1129f5f126be24942`
-- RED (tests-only): `fd314db58f032e14443bed9046a917668b8ea827` — `plans/AGB-6/red-evidence.txt`
-- GREEN (initial): `f2cd4f428b342e2bace368400c9923899b9dcb49`
-- Review-1 RED: `7dc83f4e4ccae5277b381b5f2c9319ed8a7da7e8` — `plans/AGB-6/review-red-evidence.txt`
-- Review-1 GREEN: `d4b6e88476645b677d7bffb3fc86d06b42f91ab2`
-- Review-2 RED: `2a206043797178c710500cb1bd263aa197888d08` — `plans/AGB-6/review-2-red-evidence.txt`
-- Review-2 GREEN: `0a763d3b8e866da556ed625bc8cf2e2ae4b6bed8`
-- Review-3 RED: `a004dfdcec5a3f917527e43ab71d5a2679c867d5` — `plans/AGB-6/review-3-red-evidence.txt`
-- Review-3 GREEN: `e663294bffd5c318e80e410e18efec0dd7a8c7fa`
+- Review-4 baseline: `9f882a40e80aeeb8ec6b92969aae03032284642e`
+- Review-4 RED: `9809fda9d2155db49974afa687c1fa8738ec539e` — `plans/AGB-6/review-4-red-evidence.txt`
+- Review-4 GREEN: see PR head
 
-## Review repair #5019192819 — addressed findings
+## Review repair #5019424546 — addressed findings
 
 | Severity | Finding | Repair |
 |---|---|---|
-| CRITICAL | Quoted/dynamic Nix Class-F evasion | `protected.rs` canonicalizes quoted attribute paths before semantic checks; rejects `${…}` fail-closed; string/comment decoys allowed |
-| IMPORTANT | Activation reservation not crash-durable | `capture.rs` fsyncs activations directory and lock parent before proceeding; `FailSyncOn` injection proves no command before durable reservation |
-| IMPORTANT | Pin/profile/boot bypass | `capture.rs` durable `PinRecord`; `pin.rs` persists; `profile.rs`/`boot.rs` require verified store readback bound to capture/base |
+| CRITICAL | Fully quoted attrpath Class-F bypass | `protected.rs` canonicalizes leading and chained quoted attrpath components; skips value strings after `=` |
+| IMPORTANT | Activations parent durability | `capture.rs` fsyncs `root` when `activations/` is newly created before reservation proceeds |
 
 ## Verification commands (bare, unpiped)
 
@@ -47,7 +35,7 @@ cargo fmt --all -- --check                              PASS (exit 0)
 cargo clippy --workspace --all-targets -- -D warnings   PASS (exit 0)
 cargo build --workspace --all-targets                   PASS (exit 0)
 cargo test --workspace                                PASS (exit 0)
-cargo test -p agentbed-adapter-nix --test l02_review_repair_3 PASS (exit 0, 11 tests)
+cargo test -p agentbed-adapter-nix --test l02_review_repair_4 PASS (exit 0, 8 tests)
 git diff --check 5c7ec772a48ce82208bc11173283d2283bf18e6d..HEAD PASS (exit 0)
 ```
 

@@ -165,27 +165,56 @@ fn canonicalize_quoted_attributes(content: &str) -> String {
     let chars: Vec<char> = content.chars().collect();
     let mut i = 0;
     while i < chars.len() {
+        if is_attrpath_quote_start(&chars, i) {
+            i = append_quoted_ident(&chars, i, &mut out);
+            continue;
+        }
         if chars[i] == '.' && i + 1 < chars.len() && chars[i + 1] == '"' {
             out.push('.');
-            i += 2;
-            while i < chars.len() && chars[i] != '"' {
-                if chars[i] == '\\' && i + 1 < chars.len() {
-                    out.push(chars[i + 1].to_ascii_lowercase());
-                    i += 2;
-                    continue;
-                }
-                out.push(chars[i].to_ascii_lowercase());
-                i += 1;
-            }
-            if i < chars.len() {
-                i += 1;
-            }
+            i = append_quoted_ident(&chars, i + 1, &mut out);
             continue;
         }
         out.push(chars[i].to_ascii_lowercase());
         i += 1;
     }
     out
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+fn is_attrpath_quote_start(chars: &[char], i: usize) -> bool {
+    if chars[i] != '"' {
+        return false;
+    }
+    let mut j = i;
+    while j > 0 && chars[j - 1].is_whitespace() {
+        j -= 1;
+    }
+    if j == 0 {
+        return true;
+    }
+    let prev = chars[j - 1];
+    if prev == '=' {
+        return false;
+    }
+    matches!(prev, '{' | '.' | ',' | '(')
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+fn append_quoted_ident(chars: &[char], start: usize, out: &mut String) -> usize {
+    let mut i = start + 1;
+    while i < chars.len() && chars[i] != '"' {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            out.push(chars[i + 1].to_ascii_lowercase());
+            i += 2;
+            continue;
+        }
+        out.push(chars[i].to_ascii_lowercase());
+        i += 1;
+    }
+    if i < chars.len() {
+        i += 1;
+    }
+    i
 }
 
 fn content_selects_watchdog(content: &str) -> bool {

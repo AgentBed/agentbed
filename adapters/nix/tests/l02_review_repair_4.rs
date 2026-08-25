@@ -67,8 +67,7 @@ fn protected_rejects_fully_quoted_boot_kernel_attrpath() {
         path: "/etc/nixos/kernel.nix".to_owned(),
         content: "{ \"boot\".\"kernelPackages\" = pkgs.linuxPackages_latest; }".to_owned(),
     };
-    let err =
-        protected::check_protected_changes(&[change]).expect_err("fully quoted kernel");
+    let err = protected::check_protected_changes(&[change]).expect_err("fully quoted kernel");
     assert_eq!(err, ProtectedRejectReason::Kernel);
 }
 
@@ -78,8 +77,7 @@ fn protected_rejects_fully_quoted_boot_loader_grub_attrpath() {
         path: "/etc/nixos/boot.nix".to_owned(),
         content: "{ \"boot\".\"loader\".grub.enable = true; }".to_owned(),
     };
-    let err =
-        protected::check_protected_changes(&[change]).expect_err("fully quoted loader");
+    let err = protected::check_protected_changes(&[change]).expect_err("fully quoted loader");
     assert_eq!(err, ProtectedRejectReason::Bootloader);
 }
 
@@ -89,8 +87,7 @@ fn protected_rejects_fully_quoted_networking_firewall_attrpath() {
         path: "/etc/nixos/fw.nix".to_owned(),
         content: "{ \"networking\".\"firewall\".enable = true; }".to_owned(),
     };
-    let err =
-        protected::check_protected_changes(&[change]).expect_err("fully quoted firewall");
+    let err = protected::check_protected_changes(&[change]).expect_err("fully quoted firewall");
     assert_eq!(err, ProtectedRejectReason::Firewall);
 }
 
