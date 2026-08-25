@@ -17,6 +17,7 @@
 | GREEN (initial RESULT) | `522c6bcc67a8406e89f7f18cab06367273206314` | initial `RESULT.md` |
 | Review RED (scenario verification) | `94301f8b0aeefb0560df87caecba8271ec81ac16` | `plans/AGB-8/review-red-evidence.txt` + `watchdogd/tests/l03_review_repair.rs` |
 | Review GREEN (production repair) | `b79ba1bec7d0b2b257a211f6470825b47d21a347` | production fixes for scenario findings F1–F11, F14, F15 |
+| GREEN (RESULT, review repair Stage B) | `731aaf6cb1185622db533ae4294f893cff0ef0c4` | Stage B `RESULT.md` gate evidence (clippy repair `5a7c473`) |
 
 Accepted sealed RED tests/fixtures/evidence remain byte-identical to `58ec7da` (`git diff 58ec7da -- <red-files>` empty at final head). Review RED assertions/evidence remain byte-identical to `94301f8`; the only shared-fixture delta is minimal `StreamPeerAuth` seam wiring in `watchdogd/tests/common/{fakes,deps}.rs`.
 
@@ -69,19 +70,17 @@ Production paths (22 files; sealed RED tests unchanged):
 
 ## Verification commands (bare, unpiped, final head)
 
-_Gate evidence recorded at final HEAD after this RESULT commit._
-
 ```text
-cargo fmt --all -- --check                              PENDING
-cargo clippy --workspace --all-targets -- -D warnings   PENDING
-cargo build --workspace --all-targets                   PENDING
-cargo test --workspace                                PENDING
-cargo test -p agentbed-watchdogd --test l03_review_repair PENDING
-cargo test -p agentbed-watchdogd --test l03_failure_matrix PENDING
-cargo test -p agentbed-watchdogd --test fencing_fixture   PENDING
-cargo test -p agentbed-broker --test l03_watchdog_client PENDING
-cargo test -p agentbed-adapter-nix --test l03_protected_broker_state PENDING
-git diff --check 01a4bf8c8de2a5cb4544bf74af9bb819c29adf1c..HEAD PENDING
+cargo fmt --all -- --check                              PASS (exit 0)
+cargo clippy --workspace --all-targets -- -D warnings   PASS (exit 0)
+cargo build --workspace --all-targets                   PASS (exit 0)
+cargo test --workspace                                PASS (exit 0)
+cargo test -p agentbed-watchdogd --test l03_review_repair PASS (exit 0, 19/19)
+cargo test -p agentbed-watchdogd --test l03_failure_matrix PASS (exit 0, 54/54)
+cargo test -p agentbed-watchdogd --test fencing_fixture   PASS (exit 0, 1/1)
+cargo test -p agentbed-broker --test l03_watchdog_client PASS (exit 0, 9/9)
+cargo test -p agentbed-adapter-nix --test l03_protected_broker_state PASS (exit 0, 6/6)
+git diff --check 01a4bf8c8de2a5cb4544bf74af9bb819c29adf1c..HEAD PASS (exit 0)
 ```
 
 ## Hard non-goals held (L03-AC12)
