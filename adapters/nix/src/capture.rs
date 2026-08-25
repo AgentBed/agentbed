@@ -126,11 +126,8 @@ impl CaptureStore {
     pub fn reserve_activation(&self, candidate_closure: &str) -> Result<(), CaptureError> {
         let _guard = self.lock.lock().expect("capture");
         let activations = self.activations_dir();
-        let newly_created = !activations.exists();
         fs::create_dir_all(&activations).map_err(|_| CaptureError::Io)?;
-        if newly_created {
-            self.syncer.sync_dir(&self.root)?;
-        }
+        self.syncer.sync_dir(&self.root)?;
         self.syncer.sync_dir(&activations)?;
         if self.activation_record_path(candidate_closure).exists() {
             return Err(CaptureError::Conflict);
