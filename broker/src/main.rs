@@ -72,6 +72,12 @@ fn run() -> Result<(), String> {
         .clone()
         .ok_or_else(|| format!("--manifests is required\n\n{USAGE}"))?;
 
+    let state_dir = config
+        .state_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("/var/lib/agentbed/broker/state"));
+    std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
+
     let observer: Arc<dyn ObservationSink> = Arc::new(StderrObserver);
     let dispatcher = Arc::new(Dispatcher::new(
         tokens,
@@ -79,6 +85,7 @@ fn run() -> Result<(), String> {
         // Gate 0 resolves no host adapter, so every resource reports `none`
         // and every D/M step would be refused. The Nix adapter lands at Gate 1.
         Box::new(UnresolvedAdapter),
+        state_dir,
     ));
     let mut server = Server::start(&config, dispatcher, observer).map_err(|e| e.to_string())?;
     eprintln!(

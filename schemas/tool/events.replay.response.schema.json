@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbed.dev/schemas/tool/events.replay.response.schema.json",
+  "title": "events.replay result",
+  "type": "object",
+  "required": ["log_id", "events", "cursor"],
+  "additionalProperties": false,
+  "properties": {
+    "log_id": { "type": "string" },
+    "cursor": { "type": "string" },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["seq", "kind", "payload"],
+        "additionalProperties": false,
+        "properties": {
+          "seq": { "type": "integer", "minimum": 0 },
+          "kind": { "type": "string" },
+          "payload": { "type": "string" }
+        }
+      }
+    }
+  }
+}

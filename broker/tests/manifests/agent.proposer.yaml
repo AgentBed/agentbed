@@ -1,0 +1,13 @@
+# Fixture: may call config.propose ({D}) for L01 transaction RPC tests.
+kind: agent
+version: 1
+name: gate1-proposer
+runtime: mcp-client
+identity:
+  mcp_client_id: mcp-client:gate1-proposer
+  owner: lp
+capabilities:
+  quotas:
+    calls_per_day: 100
+  risk:
+    max_unapproved_class: D

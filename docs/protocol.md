@@ -102,7 +102,7 @@ Frozen elements, each for a reason:
 
 ## 7. Broker RPC v2 — Gate 1 contract
 
-**Status:** Revision 1 · 2026-08-24 · normative for `proto/`, `broker/` and `gw/` from Gate 1 L00 onward. Protocol version 1 (§§1–6 above) remains frozen byte-for-byte. Version 2 adds the Gate 1 operation surface without revising v1.
+**Status:** Revision 2 · 2026-08-24 · normative for `proto/`, `broker/` and `gw/` from Gate 1 L00 onward. Protocol version 1 (§§1–6 above) remains frozen byte-for-byte. Version 2 adds the Gate 1 operation surface without revising v1. **Revision 2** documents the Gate 1 L01 `events.replay` read operation added to the v2 surface (see §7.3).
 
 ### 7.1 Version dispatch
 
@@ -113,7 +113,7 @@ Frozen elements, each for a reason:
 | `v` | Operation set |
 |---|---|
 | `1` | `system.info` only — unchanged from §2 |
-| `2` | `system.info`, `config.propose`, `tx.test`, `tx.apply`, `tx.rollback`, `tx.status` |
+| `2` | `system.info`, `config.propose`, `tx.test`, `tx.apply`, `tx.rollback`, `tx.status`, `events.replay` |
 
 Within v2, `op_version` defaults to `1` and follows the same refusal rules as §2: unsupported operation versions return `unsupported_operation`, never silent reinterpretation.
 
@@ -145,8 +145,9 @@ Effect sets are minima from ADR-001 §5.1; arguments can only raise them (`docs/
 | `tx.apply` | `{D}` | `{tx_id, idempotency_key}` | `{tx_id, state}` |
 | `tx.rollback` | `{D}` | `{tx_id, idempotency_key}` — revert is a new forward transaction (ADR-001 §5.2) | `{tx_id, state}` |
 | `tx.status` | `{R}` | `{tx_id}` | `{tx_id, state, effect_set, base_revision?}` |
+| `events.replay` | `{R}` | `{cursor?}` — opaque base64url cursor from a prior replay; omitted reads from log head | `{log_id, events:[{seq, kind, payload}], cursor}` |
 
-`tx_id` is a ULID (26 Crockford base32 characters). `idempotency_key` is graphic ASCII, 1..128 bytes. `base_revision` captures `{generation?, etc_git_commit, config_digest}` as persisted in effects.md §3. JSON Schemas live under `schemas/tool/`.
+`tx_id` is a ULID (26 Crockford base32 characters). `idempotency_key` is graphic ASCII, 1..128 bytes. `base_revision` captures `{generation?, etc_git_commit, config_digest}` as persisted in effects.md §3. Event cursors are opaque base64url strings encoding `{"log_id":"<uuid>","seq":<u64>}`. JSON Schemas live under `schemas/tool/`.
 
 Semantic checks — manifest path allowlists, class-F diff rejection, WAL presence, watchdog arming — are broker-side and land in later Gate 1 lanes. L00 validates wire shape, computes digests, and refuses execution of mutating operations with `internal` until the engine exists.
 
@@ -154,5 +155,5 @@ Semantic checks — manifest path allowlists, class-F diff rejection, WAL presen
 
 - **Dual-version coexistence:** v1 and v2 frames may be sent to the same broker socket during migration. Dispatch is by explicit `v`; no auto-upgrade.
 - **Gateway responsibility:** the gateway chooses which protocol version to emit per tool call. Gate 0 gateways may remain v1-only for `system.info`; Gate 1 tools require v2.
-- **Additive changes:** new operations or optional result fields within v2 require a new `op_version` or a new protocol version — never silent extension under an existing version.
+- **Additive changes:** new operations or optional result fields within v2 require a new `op_version` or a new protocol version — never silent extension under an existing version. Gate 1 L01 adds `events.replay` to the v2 operation table in this revision; clients must not assume the operation exists on brokers that have not adopted protocol.md revision 2.
 - **Breaking changes:** new protocol version (`v: 3`), never an in-place edit to v1 or v2 guarantees.

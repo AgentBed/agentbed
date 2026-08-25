@@ -42,6 +42,7 @@ pub mod adapter;
 pub mod config;
 pub mod digest;
 pub mod dispatch;
+pub mod events;
 pub mod host;
 pub mod identity;
 pub mod jcs;
@@ -53,7 +54,9 @@ pub mod quota;
 pub mod safety;
 pub mod server;
 pub mod signals;
+pub mod storage;
 pub mod tools;
+pub mod transaction;
 
 pub use config::BrokerConfig;
 pub use server::Server;

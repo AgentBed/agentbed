@@ -1,0 +1,148 @@
+# AGB-4 RED→GREEN evidence (L01-AC08)
+
+## RED (commit `67acffd`, tests-only on plan `76f4f22`)
+
+```bash
+cargo test -p agentbed-broker --test transaction_state
+```
+
+Exit code: 101 (compile failure — tests cannot run without L01 modules)
+
+```
+error[E0433]: cannot find `transaction` in `agentbed_broker`
+ --> broker/tests/transaction_state.rs:3:22
+  |
+3 | use agentbed_broker::transaction::state::{
+  |                      ^^^^^^^^^^^ could not find `transaction` in `agentbed_broker`
+```
+
+Additional test binaries added (same compile failure class until implementation):
+`wal_durability`, `transaction_engine`, `events_log`, `tx_status_rpc`, `performance_reads`.
+
+## GREEN (implementation commit on branch `agent/agb-4/l01-durable-transaction-core`)
+
+```bash
+cargo test -p agentbed-broker --test transaction_state   # 5 passed
+cargo test -p agentbed-broker --test wal_durability      # 3 passed
+cargo test -p agentbed-broker --test transaction_engine    # 5 passed
+cargo test -p agentbed-broker --test events_log            # 3 passed
+cargo test -p agentbed-broker --test tx_status_rpc         # 2 passed
+cargo test -p agentbed-broker --test performance_reads     # 1 passed
+cargo test --workspace                                     # PASS (all crates)
+```
+
+## Repair RED (native review #5010391942 @ `daaaae0`, tests-only)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review
+cargo test -p agentbed-gw --test events_resource
+```
+
+Exit code: 101 — 8 broker repair assertions failed + 1 gateway resource assertion failed (review defects, not compile noise):
+
+```
+post_restart_config_propose_replay_returns_original_without_duplicate_activity — new tx_id after restart
+post_restart_tx_apply_replay_returns_original_without_duplicate_activity — InvalidTransition on replay
+conflicting_idempotency_reuse_fails_closed_after_restart — second body accepted after restart
+orphan_wal_temp_enters_safe_mode_and_refuses_dm — D/M accepted with orphan *.tmp
+checkpoint_seq_mismatch_enters_safe_mode_and_refuses_dm — D/M accepted with bad checkpoint
+corrupt_event_log_enters_safe_mode_and_refuses_dm — D/M accepted with truncated log.jsonl
+concurrent_same_idempotency_key_serializes_to_one_transaction — duplicate tx_ids under race
+event_append_failure_enters_safe_mode_without_exposing_transition — transition committed despite append failure
+mcp_resources_list_includes_agentbed_events — unknown method: resources/list
+```
+
+## Repair GREEN (implementation commit on branch `agent/agb-4/l01-durable-transaction-core`)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review   # 9 passed
+cargo test -p agentbed-gw --test events_resource         # 1 passed
+cargo fmt --all -- --check                               # PASS
+cargo clippy --workspace --all-targets -- -D warnings    # PASS
+cargo build --workspace --all-targets                    # PASS
+cargo test --workspace                                   # PASS
+```
+
+## Repair RED round 2 (native review #5010707523 @ `d105e21`, tests-only)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review
+```
+
+Exit code: 101 — compile failure (new review assertions not yet implemented):
+
+```
+EngineError::OwnershipMismatch — variant not found
+tx_test / tx_apply — unexpected manifest_digest argument (ownership binding not wired)
+event_cursor_encodes_as_opaque_base64url — base64url encode not implemented
+wal_recovery_with_ten_plus_records_stays_operational — lexical WAL sort false safe mode
+moved_base_refusal_is_recorded_and_survives_restart — durable rejection not persisted
+```
+
+## Repair GREEN round 2 (implementation commit on branch `agent/agb-4/l01-durable-transaction-core`)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review   # 13 passed
+cargo test -p agentbed-gw --test events_resource         # 1 passed
+cargo fmt --all -- --check                               # PASS
+cargo clippy --workspace --all-targets -- -D warnings    # PASS
+cargo build --workspace --all-targets                    # PASS
+cargo test --workspace                                   # PASS
+```
+
+## Repair RED round 3 (native review #5010933840 @ `db27b7a`, tests-only)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review
+```
+
+Exit code: 101 — 5 assertions failed @ `db27b7a` (executed before production edits):
+
+```
+transaction_ids_are_not_static_process_counter_values — fixed counter prefix tx_id
+duplicate_tx_id_in_wal_enters_safe_mode — D/M accepted with duplicate WAL tx_id
+stale_event_cursor_is_rejected_after_log_recreation — log_id not UUID / stale cursor accepted
+cursor_without_log_id_is_rejected_on_replay — empty log_id cursor replays
+moved_base_apply_replay_returns_original_refusal_after_restart — InvalidTransition on idempotent retry
+```
+
+## Repair GREEN round 3 (implementation commit `482f8da`)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review   # 19 passed
+cargo test -p agentbed-gw --test events_resource         # 1 passed
+cargo fmt --all -- --check                               # PASS
+cargo clippy --workspace --all-targets -- -D warnings    # PASS
+cargo build --workspace --all-targets                    # PASS
+cargo test --workspace                                   # PASS
+```
+
+## Repair RED round 4 (native review #5011209070 @ `89b848e`, tests-only `d096a27`)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review -- --test-threads=1
+```
+
+Exit code: 101 — 9 assertions failed @ `89b848e` (serializer-valid fixtures; executed before production edits):
+
+```
+watchdog_committed_record_in_wal_enters_safe_mode
+watchdog_committing_record_in_wal_enters_safe_mode
+impossible_testing_to_proposed_chain_enters_safe_mode
+immutable_agent_identity_change_in_wal_enters_safe_mode
+immutable_manifest_digest_change_in_wal_enters_safe_mode
+immutable_base_revision_change_in_wal_enters_safe_mode
+unsupported_wal_record_version_enters_safe_mode
+idempotency_index_write_failure_immediate_retry_does_not_duplicate
+idempotency_index_rename_failure_immediate_retry_does_not_duplicate
+```
+
+## Repair GREEN round 4 (implementation commit `b003464`)
+
+```bash
+cargo test -p agentbed-broker --test l01_repair_review -- --test-threads=1   # 32 passed
+cargo fmt --all -- --check                               # PASS
+cargo clippy --workspace --all-targets -- -D warnings    # PASS
+cargo build --workspace --all-targets                    # PASS
+cargo test --workspace                                   # PASS
+```

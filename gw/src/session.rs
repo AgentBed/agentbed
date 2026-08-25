@@ -24,7 +24,10 @@ use serde_json::{json, Value};
 /// The one tool the Gate 0 gateway exposes.
 const SYSTEM_INFO: &str = "system.info";
 
-/// What happened to a `tools/call`.
+/// The MCP resource URI for the durable event log.
+pub const EVENTS_URI: &str = "agentbed://events";
+
+/// What happened to a `tools/call` or resource read.
 #[derive(Debug)]
 pub enum CallOutcome {
     /// The broker answered.
@@ -69,6 +72,77 @@ impl Session {
                 "additionalProperties": false,
             },
         }])
+    }
+
+    /// Resource descriptors for `resources/list`.
+    #[must_use]
+    pub fn resource_descriptors(&self) -> Value {
+        json!([{
+            "uri": EVENTS_URI,
+            "name": "agentbed-events",
+            "description": "Durable append-only activity log with cursor replay.",
+            "mimeType": "application/json",
+        }])
+    }
+
+    /// Read an MCP resource via the broker read surface.
+    pub fn read_resource(&mut self, uri: &str, cursor: Option<&str>) -> CallOutcome {
+        if uri != EVENTS_URI {
+            return CallOutcome::Refused(format!("unknown resource: {uri}"));
+        }
+        let mut params = json!({});
+        if let Some(cursor) = cursor {
+            if let Some(object) = params.as_object_mut() {
+                object.insert("cursor".to_owned(), json!(cursor));
+            }
+        }
+        if let Err(e) = validate(SchemaKind::EventsReplayRequest, &params) {
+            return CallOutcome::InvalidArguments(e.to_string());
+        }
+
+        let request_id = self.next_request_id();
+        let body = json!({
+            "v": 2,
+            "id": request_id,
+            "op": "events.replay",
+            "auth": { "token": self.token.expose() },
+            "params": params,
+        });
+        let Ok(encoded) = serde_json::to_vec(&body) else {
+            return CallOutcome::Refused("gateway could not encode the request".to_owned());
+        };
+
+        match self.broker.call(&encoded) {
+            Ok(response) => {
+                if let Some(error) = response.error {
+                    let stage = error
+                        .stage
+                        .map_or_else(|| "-".to_owned(), |s| s.ordinal().to_string());
+                    return CallOutcome::Refused(format!(
+                        "broker refused: code={:?} precedence_stage={stage}",
+                        error.code
+                    ));
+                }
+                match response.result {
+                    Some(OperationResult::EventsReplay(replay)) => serde_json::to_value(&*replay)
+                        .map_or_else(
+                            |_| {
+                                CallOutcome::Refused(
+                                    "gateway could not encode the result".to_owned(),
+                                )
+                            },
+                            CallOutcome::Result,
+                        ),
+                    Some(_) => CallOutcome::Refused(
+                        "broker returned an operation this gateway does not expose".to_owned(),
+                    ),
+                    None => CallOutcome::Refused(
+                        "broker returned neither a result nor an error".to_owned(),
+                    ),
+                }
+            }
+            Err(e) => CallOutcome::Refused(format!("broker unreachable: {e}")),
+        }
     }
 
     /// Validate a tool call and relay it to the broker.

@@ -206,6 +206,9 @@ pub enum OpName {
     /// `tx.status` — read transaction state.
     #[serde(rename = "tx.status")]
     TxStatus,
+    /// `events.replay` — read durable `agentbed://events` tail from a cursor.
+    #[serde(rename = "events.replay")]
+    EventsReplay,
 }
 
 impl OpName {
@@ -219,6 +222,7 @@ impl OpName {
             OpName::TxApply => "tx.apply",
             OpName::TxRollback => "tx.rollback",
             OpName::TxStatus => "tx.status",
+            OpName::EventsReplay => "events.replay",
         }
     }
 
@@ -239,6 +243,7 @@ impl OpName {
                 | OpName::TxApply
                 | OpName::TxRollback
                 | OpName::TxStatus
+                | OpName::EventsReplay
         )
     }
 }
@@ -293,6 +298,32 @@ pub struct TxRollbackParams {
 #[serde(deny_unknown_fields)]
 pub struct TxStatusParams {
     pub tx_id: TransactionId,
+}
+
+/// Parameters of `events.replay` at operation version 1.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventsReplayParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+/// One stored event returned by `events.replay`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredEventWire {
+    pub seq: u64,
+    pub kind: String,
+    pub payload: String,
+}
+
+/// Result of `events.replay`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventsReplayResult {
+    pub log_id: String,
+    pub events: Vec<StoredEventWire>,
+    pub cursor: String,
 }
 
 /// A broker request.
@@ -493,6 +524,9 @@ pub enum OperationResult {
     /// Result of `tx.status`.
     #[serde(rename = "tx.status")]
     TxStatus(Box<TxStatusResult>),
+    /// Result of `events.replay`.
+    #[serde(rename = "events.replay")]
+    EventsReplay(Box<EventsReplayResult>),
 }
 
 /// A broker response: exactly one of `result` or `error` is present.

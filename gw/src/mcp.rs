@@ -83,6 +83,8 @@ pub fn handle_line(session: &mut Session, line: &str) -> Option<String> {
         "initialize" => Ok(initialize_result()),
         "tools/list" => Ok(tools_list_result(session)),
         "tools/call" => tools_call(session, &message.params),
+        "resources/list" => Ok(resources_list_result(session)),
+        "resources/read" => resources_read(session, &message.params),
         "ping" => Ok(json!({})),
         _ => Err((
             codes::METHOD_NOT_FOUND,
@@ -99,13 +101,54 @@ pub fn handle_line(session: &mut Session, line: &str) -> Option<String> {
 fn initialize_result() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": { "tools": { "listChanged": false } },
+        "capabilities": {
+            "tools": { "listChanged": false },
+            "resources": { "subscribe": false, "listChanged": false }
+        },
         "serverInfo": { "name": "agentbed-gw", "version": env!("CARGO_PKG_VERSION") },
     })
 }
 
 fn tools_list_result(session: &Session) -> Value {
     json!({ "tools": session.tool_descriptors() })
+}
+
+fn resources_list_result(session: &Session) -> Value {
+    json!({ "resources": session.resource_descriptors() })
+}
+
+fn resources_read(session: &mut Session, params: &Value) -> Result<Value, (i32, String)> {
+    let Some(uri) = params.get("uri").and_then(Value::as_str) else {
+        return Err((
+            codes::INVALID_PARAMS,
+            "resources/read requires a resource uri".to_owned(),
+        ));
+    };
+    let cursor = params
+        .get("cursor")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    match session.read_resource(uri, cursor.as_deref()) {
+        CallOutcome::Result(value) => Ok(json!({
+            "contents": [{
+                "uri": uri,
+                "mimeType": "application/json",
+                "text": value.to_string(),
+            }]
+        })),
+        CallOutcome::Refused(reason) => Ok(json!({
+            "contents": [{
+                "uri": uri,
+                "mimeType": "text/plain",
+                "text": reason,
+            }],
+            "isError": true,
+        })),
+        CallOutcome::UnknownTool => {
+            Err((codes::INVALID_PARAMS, format!("unknown resource: {uri}")))
+        }
+        CallOutcome::InvalidArguments(reason) => Err((codes::INVALID_PARAMS, reason)),
+    }
 }
 
 fn tools_call(session: &mut Session, params: &Value) -> Result<Value, (i32, String)> {
