@@ -559,7 +559,8 @@ impl Dispatcher {
             EngineError::NotFound
             | EngineError::BaseRevisionMoved
             | EngineError::IdempotencyConflict
-            | EngineError::OwnershipMismatch => (
+            | EngineError::OwnershipMismatch
+            | EngineError::ProposeRejected { .. } => (
                 ErrorCode::Denied,
                 DecisionStage::OperationPolicy,
                 "transaction_refused",

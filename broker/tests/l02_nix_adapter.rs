@@ -1,6 +1,14 @@
 //! L02 broker integration: protected-path rejection and Nix propose path.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::needless_borrows_for_generic_args,
+    clippy::ptr_arg,
+    clippy::useless_format,
+    clippy::cloned_ref_to_slice_refs,
+    unused_imports
+)]
 
 use agentbed_adapter_nix::adapter::NixAdapter;
 use agentbed_adapter_nix::capture::CaptureStore;
@@ -59,10 +67,7 @@ fn register_nix_probe(runner: &FakeCommandRunner) {
         CommandSpec::nix_current_generation(),
         CommandOutput::ok("42\n"),
     );
-    runner.register(
-        CommandSpec::etc_git_head(),
-        CommandOutput::ok("abc123\n"),
-    );
+    runner.register(CommandSpec::etc_git_head(), CommandOutput::ok("abc123\n"));
     runner.register(
         CommandSpec::config_digest(),
         CommandOutput::ok(&format!("{}", "11".repeat(64))),

@@ -1,20 +1,22 @@
 //! L02 hermetic adapter integration tests (RED → GREEN gate).
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::needless_borrows_for_generic_args
+)]
 
 use agentbed_adapter_nix::adapter::NixAdapter;
 use agentbed_adapter_nix::capture::CaptureStore;
 use agentbed_adapter_nix::command_runner::{CommandOutput, CommandSpec, FakeCommandRunner};
+use agentbed_adapter_nix::probe;
 use agentbed_adapter_nix::promotion::{
     boot, build, flush, pin, profile, readback, test_activation, PromotionError,
 };
-use agentbed_adapter_nix::protected::{self, ProtectedRejectReason};
-use agentbed_adapter_nix::probe;
 use agentbed_adapter_nix::propose;
+use agentbed_adapter_nix::protected::{self, ProtectedRejectReason};
 use agentbed_protocol::digest::Digest;
-use agentbed_protocol::dto::system_info::{
-    HostSafety, RecoveryRequires, SafetySource, ServiceStateSafety,
-};
+use agentbed_protocol::dto::system_info::{HostSafety, RecoveryRequires, SafetySource};
 use agentbed_protocol::dto::transaction::BaseRevision;
 use agentbed_protocol::wire::ConfigFileChange;
 use std::path::PathBuf;
@@ -40,10 +42,7 @@ fn register_probe_commands(runner: &FakeCommandRunner) {
         CommandSpec::nix_current_generation(),
         CommandOutput::ok("42\n"),
     );
-    runner.register(
-        CommandSpec::etc_git_head(),
-        CommandOutput::ok("abc123\n"),
-    );
+    runner.register(CommandSpec::etc_git_head(), CommandOutput::ok("abc123\n"));
     runner.register(
         CommandSpec::config_digest(),
         CommandOutput::ok(&"11".repeat(64)),
@@ -145,7 +144,10 @@ fn propose_captures_immutable_candidate_and_replays_identically() {
     let base = base_revision();
     let first = propose::propose(runner.as_ref(), &[benign_change()], &base).expect("propose");
     let second = propose::propose(runner.as_ref(), &[benign_change()], &base).expect("replay");
-    assert_eq!(first.capture.candidate_closure, second.capture.candidate_closure);
+    assert_eq!(
+        first.capture.candidate_closure,
+        second.capture.candidate_closure
+    );
     assert_eq!(first.capture.base_revision, base);
     assert!(first.diff.contains("demo.nix"));
     assert_eq!(first.test_plan.adapter, "nix");

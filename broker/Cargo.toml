@@ -13,6 +13,7 @@ name = "agentbed-broker"
 path = "src/main.rs"
 
 [dependencies]
+agentbed-adapter-nix = { path = "../adapters/nix" }
 agentbed-protocol = { workspace = true }
 agentbed-schemas = { workspace = true }
 serde = { workspace = true }
@@ -24,6 +25,7 @@ ulid = "1.1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+agentbed-adapter-nix = { path = "../adapters/nix" }
 libc = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 

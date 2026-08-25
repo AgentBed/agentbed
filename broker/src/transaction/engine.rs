@@ -36,6 +36,7 @@ pub enum EngineError {
     BaseRevisionMoved,
     OwnershipMismatch,
     WatchdogAuthorityRequired,
+    ProposeRejected { reason: String },
     Storage(DurabilityError),
 }
 
@@ -194,20 +195,20 @@ impl TransactionEngine {
         let digest: Digest = parse_manifest_digest(manifest_digest);
         let base_revision = self.adapter.current_base_revision();
         let tx_id = new_tx_id();
-        let diff = params
-            .changes
-            .iter()
-            .map(|c| format!("{} => staged", c.path))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let affected_resources = vec!["root_config".to_owned()];
+        let staged = self
+            .adapter
+            .propose_config(&params.changes)
+            .map_err(|err| match err {
+                crate::adapter::AdapterProposeError::Rejected(reason) => {
+                    EngineError::ProposeRejected { reason }
+                }
+            })?;
+        let diff = staged.diff;
+        let affected_resources = staged.affected_resources;
         let wire_result = ConfigProposeResult {
             tx_id: tx_id.clone(),
             diff: diff.clone(),
-            test_plan: TestPlan {
-                adapter: "unresolved".to_owned(),
-                steps: vec!["noop-test".to_owned()],
-            },
+            test_plan: staged.test_plan,
             affected_resources: affected_resources.clone(),
             base_revision: base_revision.clone(),
         };

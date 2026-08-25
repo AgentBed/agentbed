@@ -18,7 +18,22 @@ use agentbed_protocol::dto::system_info::{
     AdapterInfo, DataSafety, ExternalEffectsSafety, HostSafety, RecoveryRequires, SafetySource,
     SafetyVector, ServiceStateSafety,
 };
-use agentbed_protocol::dto::transaction::BaseRevision;
+use agentbed_protocol::dto::transaction::{BaseRevision, TestPlan};
+use agentbed_protocol::wire::ConfigFileChange;
+
+/// Outcome of adapter-specific `config.propose` staging.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterProposeOutcome {
+    pub diff: String,
+    pub test_plan: TestPlan,
+    pub affected_resources: Vec<String>,
+}
+
+/// Adapter-level propose failures before WAL side effects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdapterProposeError {
+    Rejected(String),
+}
 
 /// What the broker needs from a host adapter.
 pub trait HostAdapter: Send + Sync {
@@ -33,6 +48,29 @@ pub trait HostAdapter: Send + Sync {
 
     /// Active base revision for transaction base-movement checks (`effects.md` §3).
     fn current_base_revision(&self) -> BaseRevision;
+
+    /// Stage a proposal through the adapter. Unresolved adapters keep L01 synthetic behavior.
+    fn propose_config(
+        &self,
+        changes: &[ConfigFileChange],
+    ) -> Result<AdapterProposeOutcome, AdapterProposeError> {
+        Ok(unresolved_propose(changes))
+    }
+}
+
+fn unresolved_propose(changes: &[ConfigFileChange]) -> AdapterProposeOutcome {
+    AdapterProposeOutcome {
+        diff: changes
+            .iter()
+            .map(|c| format!("{} => staged", c.path))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        test_plan: TestPlan {
+            adapter: "unresolved".to_owned(),
+            steps: vec!["noop-test".to_owned()],
+        },
+        affected_resources: vec!["root_config".to_owned()],
+    }
 }
 
 /// The Gate 0 adapter: resolves nothing, claims nothing.
