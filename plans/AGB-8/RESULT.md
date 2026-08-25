@@ -17,7 +17,7 @@
 | GREEN (initial RESULT) | `522c6bcc67a8406e89f7f18cab06367273206314` | initial `RESULT.md` |
 | Review RED (scenario verification) | `94301f8b0aeefb0560df87caecba8271ec81ac16` | `plans/AGB-8/review-red-evidence.txt` + `watchdogd/tests/l03_review_repair.rs` |
 | Review GREEN (production repair) | `b79ba1bec7d0b2b257a211f6470825b47d21a347` | production fixes for scenario findings F1–F11, F14, F15 |
-| GREEN (RESULT, review repair Stage B) | `731aaf6cb1185622db533ae4294f893cff0ef0c4` | Stage B `RESULT.md` gate evidence (clippy repair `5a7c473`) |
+| GREEN (RESULT, review repair Stage B) | `b46237e`, `5a7c473`, branch HEAD | Stage B `RESULT.md` gate evidence |
 
 Accepted sealed RED tests/fixtures/evidence remain byte-identical to `58ec7da` (`git diff 58ec7da -- <red-files>` empty at final head). Review RED assertions/evidence remain byte-identical to `94301f8`; the only shared-fixture delta is minimal `StreamPeerAuth` seam wiring in `watchdogd/tests/common/{fakes,deps}.rs`.
 
