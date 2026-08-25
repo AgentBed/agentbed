@@ -46,6 +46,7 @@ impl SessionState {
         )
     }
 
+    #[allow(clippy::similar_names, clippy::ref_option)]
     pub(crate) fn try_bind_with_cred(
         broker_uid: u32,
         broker_gid: u32,
@@ -143,13 +144,19 @@ fn derive_capability(entropy: &dyn Entropy, cred: &PeerCred) -> Vec<u8> {
     let mut capability = vec![0u8; 32];
     entropy.fill(&mut capability);
     for (index, byte) in cred.pid.to_ne_bytes().into_iter().enumerate() {
-        capability[index] ^= byte;
+        if let Some(slot) = capability.get_mut(index) {
+            *slot ^= byte;
+        }
     }
     for (index, byte) in cred.uid.to_ne_bytes().into_iter().enumerate() {
-        capability[8 + index] ^= byte;
+        if let Some(slot) = capability.get_mut(8 + index) {
+            *slot ^= byte;
+        }
     }
     for (index, byte) in cred.gid.to_ne_bytes().into_iter().enumerate() {
-        capability[16 + index] ^= byte;
+        if let Some(slot) = capability.get_mut(16 + index) {
+            *slot ^= byte;
+        }
     }
     capability
 }

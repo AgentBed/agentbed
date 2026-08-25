@@ -40,6 +40,7 @@ pub fn durable_atomic_rename(
     Ok(())
 }
 
+#[must_use]
 pub fn unique_temp_path(store_root: &Path, label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
