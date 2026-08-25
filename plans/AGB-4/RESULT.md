@@ -130,22 +130,29 @@ RED checkpoint: `ef0253f6e75647481f1a663c1747344fe34edee6` (parent `b8acd34e647b
 
 RED matrix @ `ef0253f` (unpiped, `--test-threads=1`): **3 FAIL / 44 PASS** (`moved_base_apply_idempotency_write_failure_crash_before_retry_consistency`, `moved_base_apply_idempotency_rename_failure_crash_before_retry_consistency`, `orphan_rejected_event_without_wal_transition_enters_safe_mode`).
 
-Test hash (`broker/tests/l01_repair_review.rs`): `76f3d4b5ca3f49fbbf1bc10c05deda1de9768cf322c147bef893e218793593ac`.
+Test hash (`broker/tests/l01_repair_review.rs`): `76f3d4b5ca3f49fbbf1bc10c05deda1de9768cf322c147bef893e218793593ac` (RED checkpoint @ `ef0253f`).
 
-GREEN @ `f35472a`:
+GREEN production commit: `eb375dde7f461aae98e0916bb6217253e34c72a9` (`AGB-4: preserve WAL event crash consistency`; child of `ef0253f6e75647481f1a663c1747344fe34edee6`).
+
+Test-contract reconciliation (Phase 2b): four review #5011747127 moved-base idempotency replay tests still asserted `wal_record_count == wal_before` after the idempotency fault, expecting soft-reverted WAL. Native review #5013663187 requires append-only `Rejected` WAL on idempotency `Storage` fault; replay must return `BaseRevisionMoved` without further WAL/event growth. Those four assertions were reconciled to `wal_before.checked_add(1)` plus `count_wal_rejected_for_tx == 1`; replay invariants (`events_before`, `BaseRevisionMoved`, status `Rejected`) unchanged. Lint hardening: `checked_add` for crash-consistency event/WAL counts.
 
 ```text
 cargo test -p agentbed-broker --test l01_repair_review moved_base_apply_idempotency_write_failure_crash_before_retry_consistency -- --exact --test-threads=1   # PASS
 cargo test -p agentbed-broker --test l01_repair_review moved_base_apply_idempotency_rename_failure_crash_before_retry_consistency -- --exact --test-threads=1   # PASS
 cargo test -p agentbed-broker --test l01_repair_review orphan_rejected_event_without_wal_transition_enters_safe_mode -- --exact --test-threads=1   # PASS
-cargo test -p agentbed-broker --test l01_repair_review -- --test-threads=1   # 43 passed; 4 failed (review #5011747127 moved-base idempotency WAL-count tests conflict with append-only repair)
-cargo fmt --all -- --check                                                   # FAIL (read-only `broker/tests/l01_repair_review.rs` @ `76f3d4b5…` not rustfmt-clean; cannot chmod/edit tests)
-cargo clippy --workspace --all-targets -- -D warnings                        # FAIL (`l01_repair_review.rs` arithmetic-side-effects in RED-added tests; read-only)
-cargo clippy -p agentbed-broker --lib -- -D warnings                         # PASS
+cargo test -p agentbed-broker --test l01_repair_review moved_base_rejection_after_idempotency_write_failure_immediate_replay -- --exact --test-threads=1   # PASS
+cargo test -p agentbed-broker --test l01_repair_review moved_base_rejection_after_idempotency_write_failure_restart_replay -- --exact --test-threads=1   # PASS
+cargo test -p agentbed-broker --test l01_repair_review moved_base_rejection_after_idempotency_rename_failure_immediate_replay -- --exact --test-threads=1   # PASS
+cargo test -p agentbed-broker --test l01_repair_review moved_base_rejection_after_idempotency_rename_failure_restart_replay -- --exact --test-threads=1   # PASS
+cargo test -p agentbed-broker --test l01_repair_review -- --test-threads=1   # 47 passed
+cargo fmt --all -- --check                                                   # PASS
+cargo clippy --workspace --all-targets -- -D warnings                        # PASS
 cargo build --workspace --all-targets                                        # PASS
-cargo test --workspace                                                       # FAIL (`l01_repair_review` 43/47; all other workspace tests PASS)
+cargo test --workspace                                                       # PASS
 ```
 
-Production files changed: `broker/src/events.rs`, `broker/src/storage/wal.rs`, `broker/src/transaction/{engine,recovery}.rs`.
+Production files changed @ `eb375dd`: `broker/src/events.rs`, `broker/src/storage/wal.rs`, `broker/src/transaction/{engine,recovery}.rs`. Post-GREEN test-only reconciliation: `broker/tests/l01_repair_review.rs`, `plans/AGB-4/RESULT.md`.
+
+Test hash (`broker/tests/l01_repair_review.rs`): `73d95c783f6e59c94811210f2f95103d04c6c0fd0a927ff12efb4abede34d793`.
 
 Gate 1 remains open.

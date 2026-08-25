@@ -1292,7 +1292,13 @@ fn moved_base_rejection_after_idempotency_write_failure_immediate_replay() {
             .tx_apply("agent:a", "sha256:abc", &apply_params)
             .expect_err("replay refusal");
         assert!(matches!(err, EngineError::BaseRevisionMoved));
-        assert_eq!(wal_record_count(&dir), wal_before);
+        assert_eq!(
+            wal_record_count(&dir),
+            wal_before
+                .checked_add(1)
+                .expect("append-only rejection adds one WAL record")
+        );
+        assert_eq!(count_wal_rejected_for_tx(&dir, &tx_id), 1);
         assert_eq!(event_count(&dir), events_before);
     }
 
@@ -1328,7 +1334,13 @@ fn moved_base_rejection_after_idempotency_write_failure_restart_replay() {
         .tx_apply("agent:a", "sha256:abc", &apply_params)
         .expect_err("replay refusal after restart");
     assert!(matches!(err, EngineError::BaseRevisionMoved));
-    assert_eq!(wal_record_count(&dir), wal_before);
+    assert_eq!(
+        wal_record_count(&dir),
+        wal_before
+            .checked_add(1)
+            .expect("append-only rejection adds one WAL record")
+    );
+    assert_eq!(count_wal_rejected_for_tx(&dir, &tx_id), 1);
     assert_eq!(event_count(&dir), events_before);
 
     let status = engine.tx_status(&tx_id).expect("status");
@@ -1358,7 +1370,13 @@ fn moved_base_rejection_after_idempotency_rename_failure_immediate_replay() {
             .tx_apply("agent:a", "sha256:abc", &apply_params)
             .expect_err("replay refusal");
         assert!(matches!(err, EngineError::BaseRevisionMoved));
-        assert_eq!(wal_record_count(&dir), wal_before);
+        assert_eq!(
+            wal_record_count(&dir),
+            wal_before
+                .checked_add(1)
+                .expect("append-only rejection adds one WAL record")
+        );
+        assert_eq!(count_wal_rejected_for_tx(&dir, &tx_id), 1);
         assert_eq!(event_count(&dir), events_before);
     }
 
@@ -1393,7 +1411,13 @@ fn moved_base_rejection_after_idempotency_rename_failure_restart_replay() {
         .tx_apply("agent:a", "sha256:abc", &apply_params)
         .expect_err("replay refusal after restart");
     assert!(matches!(err, EngineError::BaseRevisionMoved));
-    assert_eq!(wal_record_count(&dir), wal_before);
+    assert_eq!(
+        wal_record_count(&dir),
+        wal_before
+            .checked_add(1)
+            .expect("append-only rejection adds one WAL record")
+    );
+    assert_eq!(count_wal_rejected_for_tx(&dir, &tx_id), 1);
     assert_eq!(event_count(&dir), events_before);
 
     let status = engine.tx_status(&tx_id).expect("status");
@@ -1441,12 +1465,8 @@ fn count_wal_rejected_for_tx(state_dir: &Path, tx_id: &str) -> usize {
 }
 
 fn wal_record_bytes_at_seq(state_dir: &Path, seq: u64) -> Vec<u8> {
-    std::fs::read(
-        state_dir
-            .join("wal/records")
-            .join(format!("{seq}.json")),
-    )
-    .expect("wal record bytes")
+    std::fs::read(state_dir.join("wal/records").join(format!("{seq}.json")))
+        .expect("wal record bytes")
 }
 
 fn assert_moved_base_crash_before_retry_consistency(
@@ -1480,7 +1500,9 @@ fn assert_moved_base_crash_before_retry_consistency(
 
     {
         let engine = TransactionEngine::open(dir, MovedBaseAdapter).expect("reopen before retry");
-        let status = engine.tx_status(tx_id).expect("status readable after crash");
+        let status = engine
+            .tx_status(tx_id)
+            .expect("status readable after crash");
         assert_eq!(
             status.state,
             TransactionState::Rejected,
@@ -1495,7 +1517,9 @@ fn assert_moved_base_crash_before_retry_consistency(
     );
     assert_eq!(
         wal_record_count(dir),
-        wal_before + 1,
+        wal_before
+            .checked_add(1)
+            .expect("append-only rejection adds one WAL record"),
         "WAL must gain one transition without rewriting Testing"
     );
     assert_eq!(
@@ -1510,7 +1534,12 @@ fn assert_moved_base_crash_before_retry_consistency(
     assert_eq!(testing_after.state, TransactionState::Testing);
     assert_eq!(wal_record_to_json(&testing_after), testing_json);
 
-    assert_eq!(event_count(dir), events_before + 1);
+    assert_eq!(
+        event_count(dir),
+        events_before
+            .checked_add(1)
+            .expect("append-only rejection adds one event")
+    );
     assert_eq!(count_tx_state_events(dir, tx_id, "Rejected"), 1);
 
     let wal_after_crash = wal_record_count(dir);
@@ -1622,7 +1651,10 @@ fn orphan_rejected_event_without_wal_transition_enters_safe_mode() {
         .config_propose(
             "agent:a",
             "sha256:abc",
-            &propose_params("after-orphan-rejected-event", "/etc/nixos/configuration.nix"),
+            &propose_params(
+                "after-orphan-rejected-event",
+                "/etc/nixos/configuration.nix",
+            ),
         )
         .expect_err("event/WAL divergence must enter safe mode");
     assert!(matches!(err, EngineError::SafeMode));
