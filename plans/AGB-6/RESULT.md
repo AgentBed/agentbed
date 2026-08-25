@@ -35,8 +35,8 @@
 - Review-4 GREEN: `e582ec2cc17628fbbde71ab0dbf71c399c213423`
 - Review-5 RED: `2ef152a62d91ccb8e6987099c612ed5ae8bbfd39` — `plans/AGB-6/review-5-red-evidence.txt`
 - Review-5 GREEN: `86948e878f36860a07df5883ff335e0453efe82b`
-- Review-6 RED: see commit `0e3a05e` — `plans/AGB-6/review-6-red-evidence.txt`
-- Review-6 GREEN: see PR head
+- Review-6 RED: `0e3a05eeb3c9c22fab46a1e2a0cb51b8dfecd29d` — `plans/AGB-6/review-6-red-evidence.txt`
+- Review-6 GREEN: `3a33132b0e7611b8c67b96ba4f3ed511443382c5`
 
 ## Review repair #5019548471 — addressed findings
 
