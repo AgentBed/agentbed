@@ -55,9 +55,7 @@ fn pin_candidate(
 }
 
 fn is_boot_invocation(spec: &CommandSpec) -> bool {
-    spec.argv
-        .get(1)
-        .is_some_and(|arg| arg == "boot")
+    spec.argv.get(1).is_some_and(|arg| arg == "boot")
         && spec.executable.contains("switch-to-configuration")
 }
 
