@@ -1,8 +1,8 @@
 # AGB-6 — L02 Nix proposal, test activation, and boot-promotion primitives
 
-**Issue:** AGB-6 · parent AGB-1 · GitHub #12  
-**Workflow:** `workflow:guarded`  
-**Baseline:** `5c7ec772a48ce82208bc11173283d2283bf18e6d` (`origin/main`, verified 2026-08-24)  
+**Issue:** AGB-6 · parent AGB-1 · GitHub #12
+**Workflow:** `workflow:guarded`
+**Baseline:** `5c7ec772a48ce82208bc11173283d2283bf18e6d` (`origin/main`, verified 2026-08-24)
 **Roadmap gate / exit:** Gate 1 L02 (`plans/AGB-1/PLAN.md` lane L02). Gate 1 remains open after this lane.
 
 ## 1. Evidence and scope

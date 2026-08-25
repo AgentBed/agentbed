@@ -38,6 +38,72 @@ impl CaptureStore {
         self.active_path().with_extension("json.synced").exists()
     }
 
+    pub fn activation_record_path(&self, candidate_closure: &str) -> PathBuf {
+        self.activations_dir()
+            .join(activation_filename(candidate_closure))
+    }
+
+    pub fn is_activation_recorded(&self, candidate_closure: &str) -> bool {
+        self.activation_record_path(candidate_closure).exists()
+    }
+
+    pub fn reserve_activation(&self, candidate_closure: &str) -> Result<(), CaptureError> {
+        let _guard = self.lock.lock().expect("capture");
+        fs::create_dir_all(self.activations_dir()).map_err(|_| CaptureError::Io)?;
+        if self.activation_record_path(candidate_closure).exists() {
+            return Err(CaptureError::Conflict);
+        }
+        let lock = self.activation_lock_path(candidate_closure);
+        if lock.exists() {
+            return Err(CaptureError::Conflict);
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+            .map_err(|_| CaptureError::Conflict)?;
+        file.write_all(b"activating\n")
+            .map_err(|_| CaptureError::Io)?;
+        sync_path(&lock)?;
+        Ok(())
+    }
+
+    pub fn release_activation_reservation(&self, candidate_closure: &str) {
+        let _guard = self.lock.lock().expect("capture");
+        let lock = self.activation_lock_path(candidate_closure);
+        let _ = fs::remove_file(lock);
+    }
+
+    pub fn finalize_activation(&self, candidate_closure: &str) -> Result<(), CaptureError> {
+        let _guard = self.lock.lock().expect("capture");
+        let activated = self.activation_record_path(candidate_closure);
+        if activated.exists() {
+            return Ok(());
+        }
+        let lock = self.activation_lock_path(candidate_closure);
+        if lock.exists() {
+            fs::rename(&lock, &activated).map_err(|_| CaptureError::Io)?;
+        } else {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&activated)
+                .map_err(|_| CaptureError::Conflict)?;
+        }
+        sync_path(&activated)?;
+        sync_parent(&activated)?;
+        Ok(())
+    }
+
+    fn activations_dir(&self) -> PathBuf {
+        self.root.join("activations")
+    }
+
+    fn activation_lock_path(&self, candidate_closure: &str) -> PathBuf {
+        self.activations_dir()
+            .join(format!("{}.lock", activation_filename(candidate_closure)))
+    }
+
     pub fn load_active(&self) -> Result<Option<StoredCapture>, CaptureError> {
         let path = self.active_path();
         if !path.exists() {
@@ -94,6 +160,13 @@ pub struct StoredCapture {
 
 pub(crate) fn changes_fingerprint(changes: &[ConfigFileChange]) -> String {
     serde_json::to_string(changes).unwrap_or_default()
+}
+
+fn activation_filename(candidate_closure: &str) -> String {
+    candidate_closure
+        .trim_start_matches("/nix/store/")
+        .replace('/', "_")
+        + ".activated"
 }
 
 fn sync_path(path: &Path) -> Result<(), CaptureError> {

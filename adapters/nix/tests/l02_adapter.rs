@@ -160,7 +160,9 @@ fn propose_captures_immutable_candidate_and_replays_identically() {
 
 #[test]
 fn promotion_build_and_test_bind_to_capture() {
-    test_activation::reset_activation_ledger_for_tests();
+    let store = CaptureStore::new(
+        std::env::temp_dir().join(format!("agb6-build-test-{}", std::process::id())),
+    );
     let runner = Arc::new(FakeCommandRunner::new());
     register_activation_probe(runner.as_ref());
     let capture = propose::CapturedProposal {
@@ -171,14 +173,14 @@ fn promotion_build_and_test_bind_to_capture() {
     };
     runner.register(
         CommandSpec::nixos_rebuild_build(&capture),
-        CommandOutput::ok("built\n"),
+        CommandOutput::ok("/nix/store/candidate-closure-build built\n"),
     );
     runner.register(
         CommandSpec::nixos_rebuild_test(&capture),
         CommandOutput::ok("/nix/store/candidate-closure-build tested\n"),
     );
     build::build(runner.as_ref(), &capture).expect("build");
-    test_activation::activate_once(runner.as_ref(), &capture).expect("test");
+    test_activation::activate_once(runner.as_ref(), &capture, &store).expect("test");
     let invocations = runner.invocations();
     assert!(invocations.iter().any(|c| c.argv_contains("build")));
     assert_eq!(
@@ -212,7 +214,10 @@ fn promotion_pin_profile_boot_flush_readback_happy_path() {
         CommandSpec::switch_to_configuration_boot(pinned),
         CommandOutput::ok(""),
     );
-    runner.register(CommandSpec::sync_paths(), CommandOutput::ok(""));
+    runner.register(
+        CommandSpec::sync_profile_boot_boundaries(),
+        CommandOutput::ok(""),
+    );
     runner.register(
         CommandSpec::read_profile_target(),
         CommandOutput::ok(&format!("{pinned}\n")),
@@ -241,7 +246,9 @@ fn promotion_pin_profile_boot_flush_readback_happy_path() {
 
 #[test]
 fn promotion_failures_are_explicit_at_each_boundary() {
-    test_activation::reset_activation_ledger_for_tests();
+    let store = CaptureStore::new(
+        std::env::temp_dir().join(format!("agb6-failures-{}", std::process::id())),
+    );
     let runner = Arc::new(FakeCommandRunner::new());
     let capture = propose::CapturedProposal {
         base_revision: base_revision(),
@@ -260,14 +267,14 @@ fn promotion_failures_are_explicit_at_each_boundary() {
     register_activation_probe(runner.as_ref());
     runner.register(
         CommandSpec::nixos_rebuild_build(&capture),
-        CommandOutput::ok("built\n"),
+        CommandOutput::ok("/nix/store/candidate-closure-failures built\n"),
     );
     runner.register(
         CommandSpec::nixos_rebuild_test(&capture),
         CommandOutput::err(1, "test failed"),
     );
     build::build(runner.as_ref(), &capture).expect("build ok");
-    let err = test_activation::activate_once(runner.as_ref(), &capture).expect_err("test");
+    let err = test_activation::activate_once(runner.as_ref(), &capture, &store).expect_err("test");
     assert!(matches!(err, PromotionError::CommandFailed { .. }));
 }
 

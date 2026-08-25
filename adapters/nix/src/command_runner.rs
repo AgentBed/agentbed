@@ -14,15 +14,27 @@ const SYNC: &str = "/run/current-system/sw/bin/sync";
 const READLINK: &str = "/run/current-system/sw/bin/readlink";
 const CAT: &str = "/run/current-system/sw/bin/cat";
 
+const DEFAULT_TIMEOUT_SECS: u64 = 3600;
+
 /// Specification of a command the adapter may invoke.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CommandSpec {
     pub executable: String,
     pub argv: Vec<String>,
     pub working_dir: Option<PathBuf>,
+    pub env_clear: bool,
+    pub stdin_null: bool,
+    pub timeout_secs: Option<u64>,
 }
 
 impl CommandSpec {
+    fn with_execution_policy(mut self) -> Self {
+        self.env_clear = true;
+        self.stdin_null = true;
+        self.timeout_secs = Some(DEFAULT_TIMEOUT_SECS);
+        self
+    }
+
     pub fn nix_current_generation() -> Self {
         Self {
             executable: READLINK.to_owned(),
@@ -32,7 +44,11 @@ impl CommandSpec {
                 "/nix/var/nix/profiles/system".to_owned(),
             ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn etc_git_head() -> Self {
@@ -43,7 +59,11 @@ impl CommandSpec {
                 "/etc/.git/refs/heads/agentbed-base".to_owned(),
             ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn config_digest() -> Self {
@@ -56,7 +76,11 @@ impl CommandSpec {
                 "/etc/nixos".to_owned(),
             ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn nix_eval_candidate(changes: &[ConfigFileChange]) -> Self {
@@ -75,7 +99,11 @@ impl CommandSpec {
             executable: NIX.to_owned(),
             argv,
             working_dir: Some(PathBuf::from("/etc/nixos")),
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn nixos_rebuild_build(capture: &crate::propose::CapturedProposal) -> Self {
@@ -88,7 +116,11 @@ impl CommandSpec {
                 capture.flake_ref.clone(),
             ],
             working_dir: Some(PathBuf::from("/etc/nixos")),
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn nixos_rebuild_test(capture: &crate::propose::CapturedProposal) -> Self {
@@ -104,7 +136,11 @@ impl CommandSpec {
                 capture.base_revision.generation.clone().unwrap_or_default(),
             ],
             working_dir: Some(PathBuf::from("/etc/nixos")),
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn nix_store_realise(closure: &str) -> Self {
@@ -116,7 +152,11 @@ impl CommandSpec {
                 closure.to_owned(),
             ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn nix_env_profile_set(closure: &str) -> Self {
@@ -130,7 +170,11 @@ impl CommandSpec {
                 closure.to_owned(),
             ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn switch_to_configuration_boot(closure: &str) -> Self {
@@ -141,15 +185,28 @@ impl CommandSpec {
                 "boot".to_owned(),
             ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
-    pub fn sync_paths() -> Self {
+    pub fn sync_profile_boot_boundaries() -> Self {
         Self {
             executable: SYNC.to_owned(),
-            argv: vec![SYNC.to_owned()],
+            argv: vec![
+                SYNC.to_owned(),
+                "-f".to_owned(),
+                "/nix/var/nix/profiles/system".to_owned(),
+                "/boot".to_owned(),
+            ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn read_profile_target() -> Self {
@@ -161,7 +218,11 @@ impl CommandSpec {
                 "/nix/var/nix/profiles/system".to_owned(),
             ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn read_boot_default() -> Self {
@@ -172,7 +233,11 @@ impl CommandSpec {
                 "/boot/loader/entries/agentbed-default".to_owned(),
             ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn read_closure_hash(closure: &str) -> Self {
@@ -185,7 +250,11 @@ impl CommandSpec {
                 closure.to_owned(),
             ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn read_closure_store_path(closure: &str) -> Self {
@@ -198,7 +267,11 @@ impl CommandSpec {
                 closure.to_owned(),
             ],
             working_dir: None,
+            env_clear: false,
+            stdin_null: false,
+            timeout_secs: None,
         }
+        .with_execution_policy()
     }
 
     pub fn argv_contains(&self, needle: &str) -> bool {
@@ -230,6 +303,22 @@ impl CommandOutput {
             stderr: stderr.into(),
         }
     }
+
+    pub fn timed_out() -> Self {
+        Self {
+            exit_code: -3,
+            stdout: String::new(),
+            stderr: "timeout".to_owned(),
+        }
+    }
+
+    pub fn interrupted() -> Self {
+        Self {
+            exit_code: -4,
+            stdout: String::new(),
+            stderr: "interrupted".to_owned(),
+        }
+    }
 }
 
 /// Errors from command execution.
@@ -237,6 +326,8 @@ impl CommandOutput {
 pub enum CommandError {
     NotRegistered,
     NonZeroExit { code: i32, stderr: String },
+    Timeout,
+    Interrupted,
 }
 
 /// Narrow command runner abstraction.
@@ -287,11 +378,16 @@ impl CommandRunner for FakeCommandRunner {
             .get(spec)
             .cloned()
             .ok_or(CommandError::NotRegistered)?;
-        if output.exit_code != 0 {
-            return Err(CommandError::NonZeroExit {
-                code: output.exit_code,
-                stderr: output.stderr.clone(),
-            });
+        match output.exit_code {
+            -3 => return Err(CommandError::Timeout),
+            -4 => return Err(CommandError::Interrupted),
+            code if code != 0 => {
+                return Err(CommandError::NonZeroExit {
+                    code,
+                    stderr: output.stderr.clone(),
+                });
+            }
+            _ => {}
         }
         Ok(output)
     }

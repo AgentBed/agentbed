@@ -22,6 +22,7 @@ use agentbed_protocol::wire::{
     ConfigProposeParams, EffectClass, EventsReplayResult, StoredEventWire, TxApplyParams,
     TxStatusParams, TxTestParams,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -48,8 +49,15 @@ pub struct ConfigProposeOutcome {
     pub test_plan: TestPlan,
     pub affected_resources: Vec<String>,
     pub base_revision: BaseRevision,
-    pub candidate_closure: Option<String>,
     pub state: WireState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WalConfigProposePayload {
+    #[serde(flatten)]
+    result: ConfigProposeResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    candidate_closure: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -212,9 +220,12 @@ impl TransactionEngine {
             test_plan: staged.test_plan.clone(),
             affected_resources: affected_resources.clone(),
             base_revision: base_revision.clone(),
+        };
+        let wal_payload = WalConfigProposePayload {
+            result: wire_result.clone(),
             candidate_closure: staged.candidate_closure.clone(),
         };
-        let result_json = serde_json::to_string(&wire_result).map_err(|_| EngineError::SafeMode)?;
+        let result_json = serde_json::to_string(&wal_payload).map_err(|_| EngineError::SafeMode)?;
         let seq = self.persist_transition(
             &tx_id,
             WireState::Proposed,
@@ -246,7 +257,6 @@ impl TransactionEngine {
             test_plan: wire_result.test_plan,
             affected_resources,
             base_revision,
-            candidate_closure: staged.candidate_closure,
             state: WireState::Proposed,
         })
     }
@@ -690,15 +700,18 @@ fn parse_manifest_digest(manifest_digest: &str) -> Digest {
 }
 
 fn replay_propose(entry: &IdempotencyRecord) -> Result<ConfigProposeOutcome, EngineError> {
-    let result: ConfigProposeResult =
-        serde_json::from_str(&entry.result_json).map_err(|_| EngineError::IdempotencyConflict)?;
+    let result = serde_json::from_str::<WalConfigProposePayload>(&entry.result_json)
+        .map(|payload| payload.result)
+        .or_else(|_| {
+            serde_json::from_str::<ConfigProposeResult>(&entry.result_json)
+                .map_err(|_| EngineError::IdempotencyConflict)
+        })?;
     Ok(ConfigProposeOutcome {
         tx_id: result.tx_id,
         diff: result.diff,
         test_plan: result.test_plan,
         affected_resources: result.affected_resources,
         base_revision: result.base_revision,
-        candidate_closure: result.candidate_closure,
         state: WireState::Proposed,
     })
 }

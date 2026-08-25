@@ -36,6 +36,14 @@ impl From<CommandError> for PromotionError {
         match value {
             CommandError::NotRegistered => Self::NotRegistered,
             CommandError::NonZeroExit { code, stderr } => Self::CommandFailed { code, stderr },
+            CommandError::Timeout => Self::CommandFailed {
+                code: -1,
+                stderr: "timeout".to_owned(),
+            },
+            CommandError::Interrupted => Self::CommandFailed {
+                code: -2,
+                stderr: "interrupted".to_owned(),
+            },
         }
     }
 }

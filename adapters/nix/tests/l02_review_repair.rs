@@ -167,7 +167,9 @@ fn readback_must_query_closure_store_path() {
 
 #[test]
 fn test_activation_allows_only_once_per_candidate() {
-    test_activation::reset_activation_ledger_for_tests();
+    let store = CaptureStore::new(
+        std::env::temp_dir().join(format!("agb6-review1-once-{}", std::process::id())),
+    );
     let runner = Arc::new(FakeCommandRunner::new());
     let capture = capture();
     runner.register(
@@ -183,13 +185,15 @@ fn test_activation_allows_only_once_per_candidate() {
         CommandSpec::nixos_rebuild_test(&capture),
         CommandOutput::ok("/nix/store/candidate-closure tested\n"),
     );
-    test_activation::activate_once(runner.as_ref(), &capture).expect("first");
-    test_activation::activate_once(runner.as_ref(), &capture).expect_err("second");
+    test_activation::activate_once(runner.as_ref(), &capture, &store).expect("first");
+    test_activation::activate_once(runner.as_ref(), &capture, &store).expect_err("second");
 }
 
 #[test]
 fn test_activation_rejects_moved_base() {
-    test_activation::reset_activation_ledger_for_tests();
+    let store = CaptureStore::new(
+        std::env::temp_dir().join(format!("agb6-review1-moved-{}", std::process::id())),
+    );
     let runner = Arc::new(FakeCommandRunner::new());
     let capture = capture();
     runner.register(
@@ -205,7 +209,7 @@ fn test_activation_rejects_moved_base() {
         CommandSpec::nixos_rebuild_test(&capture),
         CommandOutput::ok("/nix/store/candidate-closure tested\n"),
     );
-    test_activation::activate_once(runner.as_ref(), &capture).expect_err("moved base");
+    test_activation::activate_once(runner.as_ref(), &capture, &store).expect_err("moved base");
 }
 
 #[test]

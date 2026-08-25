@@ -27,7 +27,12 @@ pub enum ProbeError {
 pub fn probe(runner: &dyn CommandRunner) -> Result<ProbeResult, ProbeError> {
     let generation = match runner.run(&CommandSpec::nix_current_generation()) {
         Ok(output) => output.stdout.trim().to_owned(),
-        Err(CommandError::NonZeroExit { .. } | CommandError::NotRegistered) => {
+        Err(
+            CommandError::NonZeroExit { .. }
+            | CommandError::NotRegistered
+            | CommandError::Timeout
+            | CommandError::Interrupted,
+        ) => {
             return Err(ProbeError::IncompleteObservation);
         }
     };

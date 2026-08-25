@@ -67,10 +67,6 @@ fn nix_propose_public_response_matches_v2_schema_without_candidate_closure() {
     let outcome = engine
         .config_propose("agent:a", "sha256:abc", &params)
         .expect("propose");
-    assert!(
-        outcome.candidate_closure.is_none(),
-        "public engine outcome must not expose candidate_closure"
-    );
 
     let public = ConfigProposeResult {
         tx_id: outcome.tx_id,
@@ -78,7 +74,6 @@ fn nix_propose_public_response_matches_v2_schema_without_candidate_closure() {
         test_plan: outcome.test_plan,
         affected_resources: outcome.affected_resources,
         base_revision: outcome.base_revision,
-        candidate_closure: None,
     };
     let json = serde_json::to_value(&public).expect("json");
     assert!(

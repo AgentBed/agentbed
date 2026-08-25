@@ -273,7 +273,6 @@ impl Dispatcher {
                         test_plan: outcome.test_plan,
                         affected_resources: outcome.affected_resources,
                         base_revision: outcome.base_revision,
-                        candidate_closure: outcome.candidate_closure,
                     },
                 )))
             },

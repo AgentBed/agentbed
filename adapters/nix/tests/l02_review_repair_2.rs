@@ -6,13 +6,15 @@
     clippy::needless_borrows_for_generic_args
 )]
 
+use agentbed_adapter_nix::capture::CaptureStore;
 use agentbed_adapter_nix::command_runner::{CommandOutput, CommandSpec, FakeCommandRunner};
 use agentbed_adapter_nix::promotion::{build, flush, test_activation, PromotionError};
-use agentbed_adapter_nix::protected::{self, ProtectedRejectReason};
 use agentbed_adapter_nix::propose;
+use agentbed_adapter_nix::protected::{self, ProtectedRejectReason};
 use agentbed_protocol::digest::Digest;
 use agentbed_protocol::dto::transaction::BaseRevision;
 use agentbed_protocol::wire::ConfigFileChange;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Barrier;
 use std::thread;
@@ -44,6 +46,19 @@ fn register_probe(runner: &FakeCommandRunner) {
         CommandSpec::config_digest(),
         CommandOutput::ok("11".repeat(32)),
     );
+}
+
+fn activation_scratch() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "agb6-review2-act-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
 }
 
 #[test]
@@ -78,6 +93,8 @@ fn protected_rejects_deeply_nested_boot_loader_form() {
 
 #[test]
 fn activation_survives_in_memory_ledger_reset() {
+    let dir = activation_scratch();
+    let store = CaptureStore::new(dir);
     let runner = Arc::new(FakeCommandRunner::new());
     register_probe(runner.as_ref());
     let proposal = capture("/nix/store/durable-activation");
@@ -85,14 +102,16 @@ fn activation_survives_in_memory_ledger_reset() {
         CommandSpec::nixos_rebuild_test(&proposal),
         CommandOutput::ok("/nix/store/durable-activation tested\n"),
     );
-    test_activation::activate_once(runner.as_ref(), &proposal).expect("first");
-    test_activation::reset_activation_ledger_for_tests();
-    let err = test_activation::activate_once(runner.as_ref(), &proposal).expect_err("durable");
+    test_activation::activate_once(runner.as_ref(), &proposal, &store).expect("first");
+    let err =
+        test_activation::activate_once(runner.as_ref(), &proposal, &store).expect_err("durable");
     assert_eq!(err, PromotionError::AlreadyActivated);
 }
 
 #[test]
 fn activation_refuses_concurrent_duplicate_candidates() {
+    let dir = activation_scratch();
+    let store = Arc::new(CaptureStore::new(dir));
     let runner = Arc::new(FakeCommandRunner::new());
     register_probe(runner.as_ref());
     let proposal = capture("/nix/store/concurrent-activation");
@@ -104,15 +123,19 @@ fn activation_refuses_concurrent_duplicate_candidates() {
     let handles: Vec<_> = (0..2)
         .map(|_| {
             let runner = Arc::clone(&runner);
+            let store = Arc::clone(&store);
             let barrier = Arc::clone(&barrier);
             let proposal = proposal.clone();
             thread::spawn(move || {
                 barrier.wait();
-                test_activation::activate_once(runner.as_ref(), &proposal)
+                test_activation::activate_once(runner.as_ref(), &proposal, store.as_ref())
             })
         })
         .collect();
-    let results: Vec<_> = handles.into_iter().map(|h| h.join().expect("join")).collect();
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|h| h.join().expect("join"))
+        .collect();
     let successes = results.iter().filter(|r| r.is_ok()).count();
     let already = results
         .iter()
@@ -120,6 +143,24 @@ fn activation_refuses_concurrent_duplicate_candidates() {
         .count();
     assert_eq!(successes, 1, "exactly one activation must succeed");
     assert_eq!(already, 1, "concurrent duplicate must fail closed");
+}
+
+#[test]
+fn activation_survives_simulated_process_restart() {
+    let dir = activation_scratch();
+    let store = CaptureStore::new(dir.clone());
+    let runner = Arc::new(FakeCommandRunner::new());
+    register_probe(runner.as_ref());
+    let proposal = capture("/nix/store/restart-activation");
+    runner.register(
+        CommandSpec::nixos_rebuild_test(&proposal),
+        CommandOutput::ok("/nix/store/restart-activation tested\n"),
+    );
+    test_activation::activate_once(runner.as_ref(), &proposal, &store).expect("first");
+    let reloaded = CaptureStore::new(dir);
+    let err =
+        test_activation::activate_once(runner.as_ref(), &proposal, &reloaded).expect_err("restart");
+    assert_eq!(err, PromotionError::AlreadyActivated);
 }
 
 #[test]
@@ -137,7 +178,10 @@ fn build_rejects_output_that_does_not_bind_candidate_closure() {
 #[test]
 fn flush_targets_explicit_profile_and_boot_boundaries() {
     let runner = FakeCommandRunner::new();
-    runner.register(CommandSpec::sync_paths(), CommandOutput::ok(""));
+    runner.register(
+        CommandSpec::sync_profile_boot_boundaries(),
+        CommandOutput::ok(""),
+    );
     flush::flush_boundaries(&runner).expect("flush");
     let invocations = runner.invocations();
     assert!(
@@ -153,16 +197,37 @@ fn flush_targets_explicit_profile_and_boot_boundaries() {
 }
 
 #[test]
-fn command_runner_declares_env_stdin_and_timeout_policy() {
-    let source = include_str!("../src/command_runner.rs");
-    assert!(source.contains("env_clear"), "missing env policy");
-    assert!(source.contains("stdin_null"), "missing stdin policy");
-    assert!(source.contains("timeout_secs"), "missing timeout budget");
+fn command_spec_declares_clear_env_null_stdin_and_timeout() {
+    let spec = CommandSpec::nixos_rebuild_build(&capture("/nix/store/policy"));
+    assert!(spec.env_clear, "commands must clear ambient environment");
+    assert!(spec.stdin_null, "commands must use null stdin");
+    assert!(
+        spec.timeout_secs.is_some(),
+        "commands must declare a timeout budget"
+    );
 }
 
 #[test]
 fn command_runner_maps_timeout_and_interruption() {
-    let source = include_str!("../src/command_runner.rs");
-    assert!(source.contains("Timeout"), "missing timeout error");
-    assert!(source.contains("Interrupted"), "missing interruption error");
+    let runner = FakeCommandRunner::new();
+    let proposal = capture("/nix/store/timeout");
+    runner.register(
+        CommandSpec::nixos_rebuild_build(&proposal),
+        CommandOutput::timed_out(),
+    );
+    let err = build::build(&runner, &proposal).expect_err("timeout");
+    assert!(matches!(
+        err,
+        PromotionError::CommandFailed { stderr, .. } if stderr == "timeout"
+    ));
+
+    runner.register(
+        CommandSpec::nixos_rebuild_build(&capture("/nix/store/interrupted")),
+        CommandOutput::interrupted(),
+    );
+    let err = build::build(&runner, &capture("/nix/store/interrupted")).expect_err("interrupted");
+    assert!(matches!(
+        err,
+        PromotionError::CommandFailed { stderr, .. } if stderr == "interrupted"
+    ));
 }

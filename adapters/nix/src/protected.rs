@@ -58,30 +58,65 @@ fn check_one(change: &ConfigFileChange, normalized: &str) -> Result<(), Protecte
         return Err(ProtectedRejectReason::SelfProtection);
     }
 
-    let content = change.content.to_lowercase();
-    if content.contains("agentbed-watchdogd")
-        || content.contains("watchdogd.package")
-        || content.contains("watchdogd.enable")
-        || content.contains("services.agentbed-watchdogd")
-        || content.contains("systemd.services.agentbed-watchdogd")
-    {
+    let semantic = normalize_nix_content(&change.content);
+    if content_selects_watchdog(&semantic) {
         return Err(ProtectedRejectReason::Watchdog);
     }
-    if content.contains("boot.kernelpackages") {
+    if content_selects_kernel(&semantic) {
         return Err(ProtectedRejectReason::Kernel);
     }
-    if content.contains("boot.loader") {
+    if content_selects_bootloader(&semantic) {
         return Err(ProtectedRejectReason::Bootloader);
     }
-    if content.contains("networking.firewall") {
+    if content_selects_firewall(&semantic) {
         return Err(ProtectedRejectReason::Firewall);
     }
-    if content.contains("filesystems.") || content.contains("filesystems =") {
+    if content_selects_storage_layout(&semantic) {
         return Err(ProtectedRejectReason::StorageLayout);
     }
 
     let _ = normalized;
     Ok(())
+}
+
+fn normalize_nix_content(content: &str) -> String {
+    content
+        .to_lowercase()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect()
+}
+
+fn content_selects_watchdog(content: &str) -> bool {
+    content.contains("agentbed-watchdogd")
+        || content.contains("watchdogd.package")
+        || content.contains("watchdogd.enable")
+        || content.contains("services.agentbed-watchdogd")
+        || content.contains("systemd.services.agentbed-watchdogd")
+}
+
+fn content_selects_kernel(content: &str) -> bool {
+    content.contains("boot.kernelpackages")
+        || (content.contains("kernelpackages")
+            && (content.contains("boot={") || content.contains("boot=")))
+}
+
+fn content_selects_bootloader(content: &str) -> bool {
+    content.contains("boot.loader")
+        || content.contains("systemd-boot")
+        || (content.contains("boot={") && content.contains("loader"))
+        || (content.contains("boot=") && content.contains("loader="))
+}
+
+fn content_selects_firewall(content: &str) -> bool {
+    content.contains("networking.firewall")
+        || (content.contains("networking={") && content.contains("firewall"))
+}
+
+fn content_selects_storage_layout(content: &str) -> bool {
+    content.contains("filesystems.")
+        || content.contains("filesystems=")
+        || content.contains("filesystems={")
 }
 
 fn normalize_path(path: &str) -> String {

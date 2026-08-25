@@ -32,8 +32,6 @@ pub struct ConfigProposeResult {
     pub test_plan: TestPlan,
     pub affected_resources: Vec<String>,
     pub base_revision: BaseRevision,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub candidate_closure: Option<String>,
 }
 
 /// Adapter-specific steps the broker will run during `tx.test` (ADR-001 §5.2).
