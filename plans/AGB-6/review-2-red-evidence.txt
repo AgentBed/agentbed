@@ -1,0 +1,33 @@
+# AGB-6 review-2 RED evidence (review #5018822751 @ d4b6e88476645b677d7bffb3fc86d06b42f91ab2)
+
+Commands executed bare and unpiped against unchanged review-1 GREEN head before repair-2 production edits.
+
+```bash
+cargo test -p agentbed-adapter-nix --test l02_review_repair_2
+```
+
+Exit code: 101 (9 failed, 0 passed)
+
+Failures (causal):
+- `protected_rejects_nested_boot_kernel_attribute_set` — nested kernel attribute set not rejected
+- `protected_rejects_nested_boot_loader_attribute_set` — nested bootloader attribute set not rejected
+- `protected_rejects_deeply_nested_boot_loader_form` — deeply nested bootloader form not rejected
+- `activation_survives_in_memory_ledger_reset` — in-memory ledger reset allows duplicate activation
+- `activation_refuses_concurrent_duplicate_candidates` — concurrent race allows duplicate activation (2 successes)
+- `build_rejects_output_that_does_not_bind_candidate_closure` — build accepts unrelated stdout
+- `flush_targets_explicit_profile_and_boot_boundaries` — flush uses bare sync without profile/boot paths
+- `command_runner_declares_env_stdin_and_timeout_policy` — CommandSpec lacks env/stdin/timeout policy fields
+- `command_runner_maps_timeout_and_interruption` — CommandError lacks Timeout/Interrupted mapping
+
+```bash
+cargo test -p agentbed-broker --test l02_review_repair_2
+```
+
+Exit code: 101 (2 failed, 1 passed)
+
+Failures (causal):
+- `nix_propose_public_response_matches_v2_schema_without_candidate_closure` — engine outcome exposes `candidate_closure` on public surface
+- `nix_propose_rejects_nested_kernel_without_wal_side_effects` — nested kernel proposal staged with WAL side effects
+
+Passing (regression guard):
+- `nix_propose_wal_still_records_internal_candidate_closure`
