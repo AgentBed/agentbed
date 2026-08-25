@@ -35,6 +35,10 @@ pub enum PromotionError {
         expected: String,
         actual: String,
     },
+    ProfileMismatch {
+        expected: String,
+        actual: String,
+    },
 }
 
 impl From<CommandError> for PromotionError {

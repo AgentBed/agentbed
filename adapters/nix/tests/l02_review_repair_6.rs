@@ -55,8 +55,9 @@ fn pin_candidate(
 }
 
 fn is_boot_invocation(spec: &CommandSpec) -> bool {
-    spec.argv.len() >= 2
-        && spec.argv[1] == "boot"
+    spec.argv
+        .get(1)
+        .is_some_and(|arg| arg == "boot")
         && spec.executable.contains("switch-to-configuration")
 }
 
@@ -84,9 +85,13 @@ fn boot_rejects_when_profile_not_advanced_to_pin() {
         CommandSpec::switch_to_configuration_boot(&proposal.candidate_closure),
         CommandOutput::ok(""),
     );
-    let _err = boot::configure_boot(&runner, &proposal, &store).expect_err("stale profile");
+    let err = boot::configure_boot(&runner, &proposal, &store).expect_err("stale profile");
+    assert!(matches!(err, PromotionError::ProfileMismatch { .. }));
     assert!(
-        runner.invocations().iter().all(|spec| !is_boot_invocation(spec)),
+        runner
+            .invocations()
+            .iter()
+            .all(|spec| !is_boot_invocation(spec)),
         "must not invoke switch-to-configuration boot before verified profile"
     );
 }
@@ -104,7 +109,10 @@ fn boot_rejects_when_profile_target_missing() {
     let err = boot::configure_boot(&runner, &proposal, &store).expect_err("missing profile");
     assert_eq!(err, PromotionError::NotRegistered);
     assert!(
-        runner.invocations().iter().all(|spec| !is_boot_invocation(spec)),
+        runner
+            .invocations()
+            .iter()
+            .all(|spec| !is_boot_invocation(spec)),
         "must not invoke boot when profile readback is unavailable"
     );
 }
@@ -115,14 +123,21 @@ fn boot_rejects_when_profile_readback_malformed() {
     let runner = FakeCommandRunner::new();
     let proposal = capture("/nix/store/malformed-profile");
     pin_candidate(&runner, &store, &proposal);
-    runner.register(CommandSpec::read_profile_target(), CommandOutput::ok("   \n"));
+    runner.register(
+        CommandSpec::read_profile_target(),
+        CommandOutput::ok("   \n"),
+    );
     runner.register(
         CommandSpec::switch_to_configuration_boot(&proposal.candidate_closure),
         CommandOutput::ok(""),
     );
-    let _err = boot::configure_boot(&runner, &proposal, &store).expect_err("malformed profile");
+    let err = boot::configure_boot(&runner, &proposal, &store).expect_err("malformed profile");
+    assert!(matches!(err, PromotionError::ProfileMismatch { .. }));
     assert!(
-        runner.invocations().iter().all(|spec| !is_boot_invocation(spec)),
+        runner
+            .invocations()
+            .iter()
+            .all(|spec| !is_boot_invocation(spec)),
         "must not invoke boot on malformed profile readback"
     );
 }
@@ -141,7 +156,8 @@ fn profile_rejects_post_set_readback_mismatch() {
         CommandSpec::read_profile_target(),
         CommandOutput::ok("/nix/store/still-stale\n"),
     );
-    let _err = profile::advance_profile(&runner, &proposal, &store).expect_err("post-set mismatch");
+    let err = profile::advance_profile(&runner, &proposal, &store).expect_err("post-set mismatch");
+    assert!(matches!(err, PromotionError::ProfileMismatch { .. }));
 }
 
 #[test]

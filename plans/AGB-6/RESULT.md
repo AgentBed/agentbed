@@ -14,10 +14,10 @@
 | **L02-AC03** | `adapters/nix/{capture,propose}.rs`, `broker/src/nix_host_adapter.rs`, `broker/src/transaction/engine.rs`; `adapters/nix/tests/l02_adapter.rs`, `broker/tests/l02_nix_adapter.rs`, `broker/tests/l02_review_repair.rs`, `broker/tests/l02_review_repair_2.rs`. |
 | **L02-AC04** | `adapters/nix/command_runner.rs`; `adapters/nix/tests/l02_adapter.rs` (`fake_runner_never_invokes_live_nixos_rebuild`), `adapters/nix/tests/l02_review_repair_2.rs`. |
 | **L02-AC05** | `adapters/nix/promotion/{build,test_activation}.rs`, `adapters/nix/capture.rs`; `adapters/nix/tests/l02_adapter.rs`, `adapters/nix/tests/l02_review_repair.rs`, `adapters/nix/tests/l02_review_repair_2.rs`, `adapters/nix/tests/l02_review_repair_3.rs`, `adapters/nix/tests/l02_review_repair_4.rs`, `adapters/nix/tests/l02_review_repair_5.rs`. |
-| **L02-AC06** | `adapters/nix/promotion/{pin,profile}.rs`, `adapters/nix/capture.rs`; `adapters/nix/tests/l02_adapter.rs`, `adapters/nix/tests/l02_review_repair.rs`, `adapters/nix/tests/l02_review_repair_3.rs`. |
-| **L02-AC07** | `adapters/nix/promotion/{boot,flush,readback}.rs`; `adapters/nix/tests/l02_adapter.rs`, `adapters/nix/tests/l02_review_repair.rs`, `adapters/nix/tests/l02_review_repair_2.rs`, `adapters/nix/tests/l02_review_repair_3.rs`. |
+| **L02-AC06** | `adapters/nix/promotion/{pin,profile}.rs`, `adapters/nix/capture.rs`; `adapters/nix/tests/l02_adapter.rs`, `adapters/nix/tests/l02_review_repair.rs`, `adapters/nix/tests/l02_review_repair_3.rs`, `adapters/nix/tests/l02_review_repair_6.rs` (`profile_rejects_post_set_readback_mismatch`, `profile_advances_when_post_set_readback_matches`). |
+| **L02-AC07** | `adapters/nix/promotion/{boot,flush,readback}.rs`; `adapters/nix/tests/l02_adapter.rs`, `adapters/nix/tests/l02_review_repair.rs`, `adapters/nix/tests/l02_review_repair_2.rs`, `adapters/nix/tests/l02_review_repair_3.rs`, `adapters/nix/tests/l02_review_repair_6.rs` (`boot_rejects_when_profile_not_advanced_to_pin`, `boot_configures_when_profile_matches_pin`). |
 | **L02-AC08** | `adapters/nix/promotion/`, `broker/tests/l02_nix_adapter.rs`; `adapters/nix/tests/l02_adapter.rs` (`promotion_failures_are_explicit_at_each_boundary`, `promotion_module_has_no_forbidden_switch_commands`). |
-| **L02-AC09** | `plans/AGB-6/{PLAN,red-evidence,review-red-evidence,review-2-red-evidence,review-3-red-evidence,review-4-red-evidence,review-5-red-evidence,RESULT}.md`; `adapters/nix/tests/l02_review_repair_5.rs` (`result_md_maps_all_l02_acceptance_ids_in_traceability_table`); verification commands below. |
+| **L02-AC09** | `plans/AGB-6/{PLAN,red-evidence,review-red-evidence,review-2-red-evidence,review-3-red-evidence,review-4-red-evidence,review-5-red-evidence,review-6-red-evidence,RESULT}.md`; `adapters/nix/tests/l02_review_repair_5.rs` (`result_md_maps_all_l02_acceptance_ids_in_traceability_table`); verification commands below. |
 | **L02-AC10** | PLAN non-goals; hermetic `FakeCommandRunner` only; no live `nixos-rebuild`/profile/boot/systemd execution paths in production defaults; residual gaps below. |
 
 ## RED→GREEN evidence (L02-AC09)
@@ -35,6 +35,8 @@
 - Review-4 GREEN: `e582ec2cc17628fbbde71ab0dbf71c399c213423`
 - Review-5 RED: `2ef152a62d91ccb8e6987099c612ed5ae8bbfd39` — `plans/AGB-6/review-5-red-evidence.txt`
 - Review-5 GREEN: `86948e878f36860a07df5883ff335e0453efe82b`
+- Review-6 RED: see commit `0e3a05e` — `plans/AGB-6/review-6-red-evidence.txt`
+- Review-6 GREEN: see PR head
 
 ## Review repair #5019548471 — addressed findings
 
@@ -43,6 +45,12 @@
 | IMPORTANT | Interrupted-creator activation durability | `capture.rs` fsyncs `root` on every reservation path before probe/test |
 | IMPORTANT | Incomplete RESULT traceability | restored full L02-AC01…L02-AC10 table; `l02_review_repair_5.rs` guards completeness |
 
+## Review repair #5019682481 — addressed findings
+
+| Severity | Finding | Repair |
+|---|---|---|
+| IMPORTANT | Profile-before-boot verification | `profile.rs` verifies readback after `nix-env --set`; `boot.rs` requires verified profile before `switch-to-configuration boot`; `l02_review_repair_6.rs` proves zero boot on failure |
+
 ## Verification commands (bare, unpiped)
 
 ```text
@@ -50,7 +58,7 @@ cargo fmt --all -- --check                              PASS (exit 0)
 cargo clippy --workspace --all-targets -- -D warnings   PASS (exit 0)
 cargo build --workspace --all-targets                   PASS (exit 0)
 cargo test --workspace                                PASS (exit 0)
-cargo test -p agentbed-adapter-nix --test l02_review_repair_5 PASS (exit 0, 2 tests)
+cargo test -p agentbed-adapter-nix --test l02_review_repair_6 PASS (exit 0, 6 tests)
 git diff --check 5c7ec772a48ce82208bc11173283d2283bf18e6d..HEAD PASS (exit 0)
 ```
 

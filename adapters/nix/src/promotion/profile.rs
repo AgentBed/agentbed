@@ -10,6 +10,31 @@ pub fn advance_profile(
 ) -> Result<(), PromotionError> {
     let pinned = verified_pin(store, capture)?;
     runner.run(&CommandSpec::nix_env_profile_set(&pinned))?;
+    read_verified_profile_target(runner, &pinned)?;
+    Ok(())
+}
+
+pub(crate) fn read_verified_profile_target(
+    runner: &dyn CommandRunner,
+    pinned: &str,
+) -> Result<(), PromotionError> {
+    let profile = runner
+        .run(&CommandSpec::read_profile_target())?
+        .stdout
+        .trim()
+        .to_owned();
+    if profile.is_empty() {
+        return Err(PromotionError::ProfileMismatch {
+            expected: pinned.to_owned(),
+            actual: "missing or empty profile target".to_owned(),
+        });
+    }
+    if profile != pinned {
+        return Err(PromotionError::ProfileMismatch {
+            expected: pinned.to_owned(),
+            actual: profile,
+        });
+    }
     Ok(())
 }
 

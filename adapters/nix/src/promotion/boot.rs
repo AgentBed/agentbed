@@ -9,6 +9,7 @@ pub fn configure_boot(
     store: &CaptureStore,
 ) -> Result<(), PromotionError> {
     let pinned = profile::verified_pin(store, capture)?;
+    profile::read_verified_profile_target(runner, &pinned)?;
     runner.run(&CommandSpec::switch_to_configuration_boot(&pinned))?;
     Ok(())
 }
