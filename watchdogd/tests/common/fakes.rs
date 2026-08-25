@@ -151,6 +151,7 @@ pub struct FakeProcessGroup {
     fence_trace: Arc<FenceTrace>,
     alive_after_term: Mutex<VecDeque<bool>>,
     alive_after_kill: Mutex<VecDeque<bool>>,
+    fail_bounded_wait: Mutex<VecDeque<bool>>,
 }
 
 impl FakeProcessGroup {
@@ -159,7 +160,12 @@ impl FakeProcessGroup {
             fence_trace,
             alive_after_term: Mutex::new(VecDeque::new()),
             alive_after_kill: Mutex::new(VecDeque::new()),
+            fail_bounded_wait: Mutex::new(VecDeque::new()),
         }
+    }
+
+    pub fn fail_next_bounded_wait(&self) {
+        self.fail_bounded_wait.lock().expect("lock").push_back(true);
     }
 
     pub fn alive_after_term(&self, alive: bool) {
@@ -208,6 +214,15 @@ impl ProcessGroupFence for FakeProcessGroup {
 
     fn bounded_wait(&self, _timeout: Duration) -> Result<(), FenceError> {
         self.fence_trace.push(FenceTraceEvent::BoundedWait);
+        if self
+            .fail_bounded_wait
+            .lock()
+            .expect("lock")
+            .pop_front()
+            .unwrap_or(false)
+        {
+            return Err(FenceError::WaitFailed);
+        }
         Ok(())
     }
 }

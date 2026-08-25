@@ -1,0 +1,20 @@
+AGB-8 L03 review-repair RED evidence (scenario verification NEEDS_FIXES)
+Rejected GREEN head: 522c6bcc67a8406e89f7f18cab06367273206314
+Scenario report: comment 2fe22244-3a73-4760-93ae-0f31bf0d416b
+Captured: 2026-08-25 (bare/unpiped; production unchanged at 522c6bc)
+
+Command: cargo test -p agentbed-watchdogd --test l03_review_repair
+Exit: 101
+Causal failure: 19/19 review-repair tests failed (0 passed)
+Findings covered: F1–F11, F14, F15 from scenario verification NEEDS_FIXES
+Scenario intent: discriminating review RED for log truncation, safe-mode persistence,
+epoch O_EXCL/monotonicity, production topology verifier, production fencing fail-closed,
+conflicting arm, decision-time base/deadline, RPC deadlines/peercred binding,
+durable high-water epoch authority, log epoch monotonicity, no-follow/durability seam,
+additive manifest enforcement, late renewal, corrupt log at decision.
+
+Command: cargo test -p agentbed-watchdogd --test l03_failure_matrix
+Exit: 0
+Result: 54/54 passed (sealed RED matrix unchanged)
+
+GREEN not claimed. Production repair unauthorized pending review-RED acceptance.
