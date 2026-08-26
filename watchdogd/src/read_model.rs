@@ -12,6 +12,25 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const HEADER_BYTES: usize = 8;
 const MAX_RECORD_BYTES: usize = 64 * 1024;
+pub(crate) const LEASE_WINDOW: Duration = Duration::from_secs(3600);
+
+/// Frozen lease policy: `min(observed_at + 3600s, hard_deadline)`.
+pub(crate) fn lease_expiry_at(
+    observed_at: SystemTime,
+    hard_deadline: SystemTime,
+) -> Result<SystemTime, Error> {
+    if hard_deadline <= observed_at {
+        return Err(invalid_log("deadline before observed_at"));
+    }
+    let candidate = observed_at
+        .checked_add(LEASE_WINDOW)
+        .ok_or_else(|| invalid_log("lease window overflow"))?;
+    Ok(if candidate <= hard_deadline {
+        candidate
+    } else {
+        hard_deadline
+    })
+}
 
 /// Watchdog-owned durable authority record kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +100,15 @@ impl AuthorityRecord {
         let worker_group_tag = self
             .worker_group_tag
             .ok_or_else(|| invalid_log("missing worker_group_tag"))?;
+        if host_id.is_empty() {
+            return Err(invalid_log("empty host_id"));
+        }
+        if tx_id.is_empty() {
+            return Err(invalid_log("empty tx_id"));
+        }
+        if lease_id.is_empty() {
+            return Err(invalid_log("empty lease_id"));
+        }
         Ok((host_id, tx_id, lease_id, worker_group_tag))
     }
 
@@ -136,13 +164,22 @@ impl AuthorityRecord {
                     return Err(invalid_log("missing base"));
                 }
                 self.reject_forbidden_fields(&["renewed_at"])?;
-                Self::time_field(self.armed_at_secs, self.armed_at_nanos, "armed_at")?;
-                Self::time_field(self.deadline_secs, self.deadline_nanos, "deadline")?;
-                Self::time_field(
+                let armed_at =
+                    Self::time_field(self.armed_at_secs, self.armed_at_nanos, "armed_at")?;
+                let deadline =
+                    Self::time_field(self.deadline_secs, self.deadline_nanos, "deadline")?;
+                let lease_expires_at = Self::time_field(
                     self.lease_expires_at_secs,
                     self.lease_expires_at_nanos,
                     "lease_expires_at",
                 )?;
+                if armed_at >= deadline {
+                    return Err(invalid_log("armed_at not before deadline"));
+                }
+                let expected = lease_expiry_at(armed_at, deadline)?;
+                if lease_expires_at != expected {
+                    return Err(invalid_log("lease_expires_at policy mismatch"));
+                }
             }
             AuthorityRecordKind::LeaseRenewed => {
                 let (_, _, _, _) = self.binding_fields()?;
@@ -339,11 +376,15 @@ impl DecisionLogReader {
                     if renewed_at < state.last_activity {
                         return Err(invalid_log("renewal before last activity"));
                     }
-                    if renewed_at >= state.lease_expires_at || renewed_at > state.deadline {
+                    if renewed_at >= state.lease_expires_at {
                         return Err(invalid_log("renewal after prior expiry"));
                     }
-                    if lease_expires_at > state.deadline {
-                        return Err(invalid_log("lease renewal past deadline"));
+                    if renewed_at >= state.deadline {
+                        return Err(invalid_log("renewal at or past hard deadline"));
+                    }
+                    let expected = lease_expiry_at(renewed_at, state.deadline)?;
+                    if lease_expires_at != expected {
+                        return Err(invalid_log("lease renewal policy mismatch"));
                     }
                     if lease_expires_at <= state.lease_expires_at {
                         return Err(invalid_log("lease renewal did not extend expiry"));
@@ -415,8 +456,8 @@ pub(crate) fn armed_record(
     worker_group_tag: WorkerGroupTag,
     armed_at: SystemTime,
     deadline: SystemTime,
-    lease_expires_at: SystemTime,
 ) -> Result<AuthorityRecord, Error> {
+    let lease_expires_at = lease_expiry_at(armed_at, deadline)?;
     let (armed_at_secs, armed_at_nanos) = time_parts(armed_at)?;
     let (deadline_secs, deadline_nanos) = time_parts(deadline)?;
     let (lease_expires_at_secs, lease_expires_at_nanos) = time_parts(lease_expires_at)?;
@@ -449,8 +490,9 @@ pub(crate) fn lease_renewed_record(
     lease_id: &str,
     worker_group_tag: WorkerGroupTag,
     renewed_at: SystemTime,
-    lease_expires_at: SystemTime,
+    hard_deadline: SystemTime,
 ) -> Result<AuthorityRecord, Error> {
+    let lease_expires_at = lease_expiry_at(renewed_at, hard_deadline)?;
     let (renewed_at_secs, renewed_at_nanos) = time_parts(renewed_at)?;
     let (lease_expires_at_secs, lease_expires_at_nanos) = time_parts(lease_expires_at)?;
     Ok(AuthorityRecord {

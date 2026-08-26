@@ -6,8 +6,8 @@ use crate::durability_store::{
 use crate::error::{DurabilityError, ExternalFloorError, RpcError, TopologyError, WatchdogError};
 use crate::interfaces::{Dependencies, FenceStage, InvariantOutcome, SignalKind};
 use crate::read_model::{
-    append_record, armed_record, decision_record, lease_renewed_record, AuthorityRecord,
-    AuthorityRecordKind, DecisionLogReader,
+    append_record, armed_record, decision_record, lease_expiry_at, lease_renewed_record,
+    AuthorityRecord, AuthorityRecordKind, DecisionLogReader,
 };
 use crate::rpc::protocol::{
     AuthenticatedRequest, LocalRequest, LocalResponse, SessionBind, SessionEstablished,
@@ -25,7 +25,6 @@ pub const DECISION_LOG_REL: &str = "decisions/decision.log";
 pub const EPOCH_HIGH_WATER_REL: &str = "epoch/high-water.json";
 pub const SAFE_MODE_REL: &str = "state/safe-mode.json";
 
-const LEASE_DURATION: Duration = Duration::from_secs(3600);
 const BASE_MANDATORY_INVARIANTS: &[&str] = &["route_present"];
 
 #[derive(Debug, Clone)]
@@ -368,7 +367,10 @@ impl WatchdogCore {
             (bound.lease_id.clone(), bound.worker_group_tag)
         };
         self.advance_epoch(epoch)?;
-        let lease_expires_at = min_time(now + LEASE_DURATION, deadline);
+        let Ok(lease_expires_at) = lease_expiry_at(now, deadline) else {
+            self.enter_safe_mode()?;
+            return Err(RpcError::SafeModeActive);
+        };
         let Ok(record) = armed_record(
             self.next_sequence()?,
             epoch,
@@ -379,7 +381,6 @@ impl WatchdogCore {
             worker_group_tag,
             now,
             deadline,
-            lease_expires_at,
         ) else {
             self.enter_safe_mode()?;
             return Err(RpcError::SafeModeActive);
@@ -453,7 +454,10 @@ impl WatchdogCore {
         if now >= lease_expires_at || now > armed_deadline {
             return Err(RpcError::ExpiredDeadline);
         }
-        let new_expiry = min_time(now + LEASE_DURATION, armed_deadline);
+        let Ok(new_expiry) = lease_expiry_at(now, armed_deadline) else {
+            self.enter_safe_mode()?;
+            return Err(RpcError::SafeModeActive);
+        };
         if new_expiry <= lease_expires_at {
             self.last_clock = now;
             return Ok(());
@@ -466,7 +470,7 @@ impl WatchdogCore {
             lease_id,
             worker_group_tag,
             now,
-            new_expiry,
+            armed_deadline,
         ) else {
             self.enter_safe_mode()?;
             return Err(RpcError::SafeModeActive);
@@ -725,14 +729,6 @@ impl SessionState {
             *core.durable_binding.borrow_mut() = Some(b);
         }
         Ok((state, established))
-    }
-}
-
-fn min_time(a: SystemTime, b: SystemTime) -> SystemTime {
-    if a <= b {
-        a
-    } else {
-        b
     }
 }
 

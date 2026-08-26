@@ -156,9 +156,7 @@ fn armed_payload_template() -> serde_json::Value {
 }
 
 fn probe_reader_rejection(log_path: &Path) -> Result<(), std::io::Error> {
-    DecisionLogReader::open(log_path)
-        .map(|_| ())
-        .map_err(|err| err)
+    DecisionLogReader::open(log_path).map(|_| ())
 }
 
 // 1. Empty binding components must be rejected on read.
