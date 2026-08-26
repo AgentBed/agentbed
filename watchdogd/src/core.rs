@@ -327,6 +327,35 @@ impl WatchdogCore {
         }
     }
 
+    fn checked_epoch_successor(&mut self, high_water: u64) -> Result<u64, RpcError> {
+        if let Some(successor) = high_water.checked_add(1) {
+            Ok(successor)
+        } else {
+            self.enter_safe_mode()?;
+            Err(RpcError::SafeModeActive)
+        }
+    }
+
+    fn normalize_session_bind(
+        &mut self,
+        bind: SessionBind,
+        durable: &Option<BoundSession>,
+    ) -> Result<SessionBind, RpcError> {
+        if durable.is_some() {
+            return Ok(bind);
+        }
+        let high_water = self.read_durable_epoch_strict()?;
+        let issued = self.checked_epoch_successor(high_water)?;
+        Ok(SessionBind::new(
+            &bind.host_id,
+            &bind.tx_id,
+            issued,
+            &bind.lease_id,
+            bind.worker_group_tag,
+            &bind.client_nonce,
+        ))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn handle_arm(
         &mut self,
@@ -342,31 +371,30 @@ impl WatchdogCore {
         if host_id != self.config.host_id {
             return Err(RpcError::WrongBinding);
         }
+        if self.armed.is_some() {
+            return Err(RpcError::ConflictingRequest);
+        }
         let observed = self.deps.base_revision.observed_base_revision();
         if !observed.is_empty() && observed != base {
             return Err(RpcError::MovedBase);
         }
         Self::validate_manifest(mandatory_invariants, additive_manifest_checks)?;
         let durable_epoch = self.read_durable_epoch_strict()?;
-        if epoch < durable_epoch {
-            return Err(RpcError::StaleEpoch);
-        }
-        if epoch != self.bound_epoch()? {
+        let expected_successor = self.checked_epoch_successor(durable_epoch)?;
+        let bound_epoch = self.bound_epoch()?;
+        if epoch != bound_epoch || epoch != expected_successor {
             return Err(RpcError::WrongEpoch);
         }
         let now = self.deps.clock.now();
         if deadline <= now {
             return Err(RpcError::ExpiredDeadline);
         }
-        if self.armed.is_some() {
-            return Err(RpcError::ConflictingRequest);
-        }
         let (lease_id, worker_group_tag) = {
             let bound = self.durable_binding.borrow();
             let bound = bound.as_ref().ok_or(RpcError::WrongBinding)?;
             (bound.lease_id.clone(), bound.worker_group_tag)
         };
-        self.advance_epoch(epoch)?;
+        self.advance_epoch()?;
         let Ok(lease_expires_at) = lease_expiry_at(now, deadline) else {
             self.enter_safe_mode()?;
             return Err(RpcError::SafeModeActive);
@@ -626,7 +654,7 @@ impl WatchdogCore {
         Ok(())
     }
 
-    fn advance_epoch(&mut self, epoch: u64) -> Result<(), RpcError> {
+    fn advance_epoch(&mut self) -> Result<(), RpcError> {
         let path = self.config.store_root.join(EPOCH_HIGH_WATER_REL);
         let parent = path.parent().ok_or(RpcError::SafeModeActive)?;
         if ambiguous_epoch_temp_residue(parent) {
@@ -638,10 +666,8 @@ impl WatchdogCore {
             return Err(RpcError::SafeModeActive);
         }
         let current = self.read_durable_epoch_strict()?;
-        if epoch < current {
-            return Err(RpcError::StaleEpoch);
-        }
-        let bytes = epoch_bytes(epoch);
+        let successor = self.checked_epoch_successor(current)?;
+        let bytes = epoch_bytes(successor);
         let tmp = unique_temp_path(parent, "epoch");
         if write_epoch_temp_exclusive(&tmp, &bytes).is_err() {
             self.enter_safe_mode()?;
@@ -688,12 +714,13 @@ impl WatchdogCore {
 
 impl SessionState {
     pub fn bind(
-        core: &WatchdogCore,
+        core: &mut WatchdogCore,
         peer_cred: &dyn crate::interfaces::PeerCredSource,
         entropy: &dyn crate::interfaces::Entropy,
         bind: SessionBind,
     ) -> Result<(Self, SessionEstablished), RpcError> {
         let durable = core.durable_binding.borrow().clone();
+        let normalized = core.normalize_session_bind(bind, &durable)?;
         let (state, established, binding) = SessionState::try_bind(
             core.config.broker_uid,
             core.config.broker_gid,
@@ -701,7 +728,7 @@ impl SessionState {
             &durable,
             peer_cred,
             entropy,
-            bind,
+            normalized,
         )?;
         if let Some(b) = binding {
             *core.durable_binding.borrow_mut() = Some(b);
@@ -710,12 +737,13 @@ impl SessionState {
     }
 
     pub fn bind_with_stream_cred(
-        core: &WatchdogCore,
+        core: &mut WatchdogCore,
         cred: &crate::interfaces::PeerCred,
         entropy: &dyn crate::interfaces::Entropy,
         bind: SessionBind,
     ) -> Result<(Self, SessionEstablished), RpcError> {
         let durable = core.durable_binding.borrow().clone();
+        let normalized = core.normalize_session_bind(bind, &durable)?;
         let (state, established, binding) = SessionState::try_bind_with_cred(
             core.config.broker_uid,
             core.config.broker_gid,
@@ -723,7 +751,7 @@ impl SessionState {
             &durable,
             cred,
             entropy,
-            bind,
+            normalized,
         )?;
         if let Some(b) = binding {
             *core.durable_binding.borrow_mut() = Some(b);

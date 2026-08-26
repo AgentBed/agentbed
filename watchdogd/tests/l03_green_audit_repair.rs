@@ -42,7 +42,7 @@ fn open_core(dir: &Path, bundle: &FakeBundle) -> WatchdogCore {
 }
 
 fn bind_session(
-    core: &WatchdogCore,
+    core: &mut WatchdogCore,
     bundle: &FakeBundle,
     tx: &str,
     epoch: u64,
@@ -162,7 +162,7 @@ fn green_audit_open_reconstructs_durable_binding() {
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bind_session(&core, &bundle, "tx-a", 1, "lease-a", 100, "nonce-a").expect("bind a");
+        bind_session(&mut core, &bundle, "tx-a", 1, "lease-a", 100, "nonce-a").expect("bind a");
     handle_authenticated(
         &mut core,
         &mut session,
@@ -178,16 +178,24 @@ fn green_audit_open_reconstructs_durable_binding() {
     )
     .expect("arm");
     drop(core);
-    let reopened = WatchdogCore::open(core_config(&dir), dependencies_from(&bundle))
+    let mut reopened = WatchdogCore::open(core_config(&dir), dependencies_from(&bundle))
         .expect("public open on nonempty store");
-    let err = bind_session(&reopened, &bundle, "tx-b", 1, "lease-b", 200, "nonce-b")
+    let err = bind_session(&mut reopened, &bundle, "tx-b", 1, "lease-b", 200, "nonce-b")
         .expect_err("conflicting bind after public open");
     assert!(
         matches!(err, RpcError::StaleReconnect),
         "expected StaleReconnect, got {err:?}"
     );
-    bind_session(&reopened, &bundle, "tx-a", 1, "lease-a", 100, "nonce-a2")
-        .expect("exact binding reconnect");
+    bind_session(
+        &mut reopened,
+        &bundle,
+        "tx-a",
+        1,
+        "lease-a",
+        100,
+        "nonce-a2",
+    )
+    .expect("exact binding reconnect");
     assert_eq!(armed_record_count(&store), 1);
 }
 
@@ -200,7 +208,7 @@ fn green_audit_reopen_preserves_renewal_observation_time() {
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bind_session(&core, &bundle, "tx-ren", 1, "lease1", 100, "nonce-ren").expect("bind");
+        bind_session(&mut core, &bundle, "tx-ren", 1, "lease1", 100, "nonce-ren").expect("bind");
     handle_authenticated(
         &mut core,
         &mut session,
@@ -240,7 +248,7 @@ fn green_audit_reopen_preserves_renewal_observation_time() {
     let mut core =
         WatchdogCore::reopen(core_config(&dir), dependencies_from(&bundle)).expect("reopen");
     let (mut session2, established2) =
-        bind_session(&core, &bundle, "tx-ren", 1, "lease1", 100, "nonce-ren2").expect("rebind");
+        bind_session(&mut core, &bundle, "tx-ren", 1, "lease1", 100, "nonce-ren2").expect("rebind");
     bundle.clock.advance(Duration::from_secs(30));
     handle_authenticated(
         &mut core,
@@ -275,8 +283,16 @@ fn green_audit_decision_rejects_clock_regression() {
     let dir = scratch_dir("green-decision-clock");
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) =
-        bind_session(&core, &bundle, "tx-clock", 1, "lease1", 100, "nonce-clock").expect("bind");
+    let (mut session, established) = bind_session(
+        &mut core,
+        &bundle,
+        "tx-clock",
+        1,
+        "lease1",
+        100,
+        "nonce-clock",
+    )
+    .expect("bind");
     let t0 = bundle.clock.now();
     handle_authenticated(
         &mut core,
@@ -325,7 +341,7 @@ fn green_audit_pre_unix_arm_time_fails_closed() {
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bind_session(&core, &bundle, "tx-pre", 1, "lease1", 100, "nonce-pre").expect("bind");
+        bind_session(&mut core, &bundle, "tx-pre", 1, "lease1", 100, "nonce-pre").expect("bind");
     let deadline = pre_unix
         .checked_add(Duration::from_secs(3600))
         .expect("future deadline");

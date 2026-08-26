@@ -41,7 +41,7 @@ fn open_core(dir: &Path, bundle: &FakeBundle) -> WatchdogCore {
 }
 
 fn bootstrap_session(
-    core: &WatchdogCore,
+    core: &mut WatchdogCore,
     bundle: &FakeBundle,
     tx: &str,
     epoch: u64,
@@ -128,7 +128,7 @@ fn assert_worker_group_tag_refused_on_decode(tag: serde_json::Value) {
 }
 
 fn decode_and_bind_future_tag(
-    core: &WatchdogCore,
+    core: &mut WatchdogCore,
     bundle: &FakeBundle,
     tag: serde_json::Value,
 ) -> Result<(), RpcError> {
@@ -143,8 +143,8 @@ fn decode_and_bind_future_tag(
 fn assert_worker_group_tag_accepted(tag: serde_json::Value) {
     let core_dir = scratch_dir("fencing-seam-wire-accept");
     let bundle = FakeBundle::new();
-    let core = open_core(&core_dir, &bundle);
-    decode_and_bind_future_tag(&core, &bundle, tag.clone()).unwrap_or_else(|err| {
+    let mut core = open_core(&core_dir, &bundle);
+    decode_and_bind_future_tag(&mut core, &bundle, tag.clone()).unwrap_or_else(|err| {
         panic!("worker_group_tag {tag} must decode/bind on production, got {err:?}")
     });
 }
@@ -254,13 +254,13 @@ fn fencing_seam_after_term_absent_skips_kill_and_reaches_zero_jobs() {
         .observe_log_at_inspection(log_path.clone());
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-term-ok", 7, "lease7", 102);
+        bootstrap_session(&mut core, &bundle, "tx-term-ok", 7, "lease7", 102);
     handle_authenticated(
         &mut core,
         &mut session,
         &established,
         1,
-        arm_request("req-arm-term-ok", "tx-term-ok", 7, "base-a"),
+        arm_request("req-arm-term-ok", "tx-term-ok", established.epoch, "base-a"),
     )
     .expect("arm");
     bundle.clock.advance(Duration::from_secs(7200));
@@ -269,7 +269,12 @@ fn fencing_seam_after_term_absent_skips_kill_and_reaches_zero_jobs() {
         &mut session,
         &established,
         2,
-        LocalRequest::request_decision("req-decide-term-ok", "host-test", "tx-term-ok", 7),
+        LocalRequest::request_decision(
+            "req-decide-term-ok",
+            "host-test",
+            "tx-term-ok",
+            established.epoch,
+        ),
     )
     .expect("decide after term-success fence");
     assert_eq!(
@@ -300,13 +305,18 @@ fn fencing_seam_after_term_survivor_requires_kill_wait_afterkill_then_zero_jobs(
         .observe_log_at_inspection(log_path.clone());
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-survivor", 8, "lease8", 103);
+        bootstrap_session(&mut core, &bundle, "tx-survivor", 8, "lease8", 103);
     handle_authenticated(
         &mut core,
         &mut session,
         &established,
         1,
-        arm_request("req-arm-survivor", "tx-survivor", 8, "base-a"),
+        arm_request(
+            "req-arm-survivor",
+            "tx-survivor",
+            established.epoch,
+            "base-a",
+        ),
     )
     .expect("arm");
     bundle.clock.advance(Duration::from_secs(7200));
@@ -315,7 +325,12 @@ fn fencing_seam_after_term_survivor_requires_kill_wait_afterkill_then_zero_jobs(
         &mut session,
         &established,
         2,
-        LocalRequest::request_decision("req-decide-survivor", "host-test", "tx-survivor", 8),
+        LocalRequest::request_decision(
+            "req-decide-survivor",
+            "host-test",
+            "tx-survivor",
+            established.epoch,
+        ),
     )
     .expect("decide after full survivor fence");
     assert_eq!(

@@ -47,7 +47,11 @@ fn open_core(dir: &Path, bundle: &FakeBundle) -> WatchdogCore {
 
 fn read_durable_high_water(store: &Path) -> u64 {
     let bytes = fs::read(store.join(EPOCH_HIGH_WATER_REL)).expect("high-water exists");
-    assert_eq!(bytes.len(), 8, "high-water must be exactly 8 big-endian bytes");
+    assert_eq!(
+        bytes.len(),
+        8,
+        "high-water must be exactly 8 big-endian bytes"
+    );
     let arr: [u8; 8] = bytes.try_into().expect("8 bytes");
     u64::from_be_bytes(arr)
 }
@@ -158,16 +162,9 @@ fn fresh_bind_epoch_is_watchdog_issued_not_broker_selected() {
         let mut core = open_core(&dir, &bundle);
         let tx = format!("tx-bind-{proposed}");
 
-        let (session, established) = bind_session(
-            &mut core,
-            &bundle,
-            &tx,
-            proposed,
-            "lease-bind",
-            100,
-            nonce,
-        )
-        .expect("bind succeeds on rejected code");
+        let (session, established) =
+            bind_session(&mut core, &bundle, &tx, proposed, "lease-bind", 100, nonce)
+                .expect("bind succeeds on rejected code");
 
         if established.epoch != EXPECTED_ISSUED_EPOCH {
             failures.push(format!(

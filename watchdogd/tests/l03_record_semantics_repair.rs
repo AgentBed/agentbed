@@ -45,7 +45,7 @@ fn open_core(dir: &Path, bundle: &FakeBundle) -> WatchdogCore {
 }
 
 fn bind_session(
-    core: &WatchdogCore,
+    core: &mut WatchdogCore,
     bundle: &FakeBundle,
     tx: &str,
     epoch: u64,
@@ -246,7 +246,7 @@ fn record_semantics_reopen_rejects_renewal_expiry_inflation() {
     let log_path = store.join(DECISION_LOG_REL);
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bind_session(&core, &bundle, "tx-a", 1, "lease-a", 100, "nonce-a").expect("bind");
+        bind_session(&mut core, &bundle, "tx-a", 1, "lease-a", 100, "nonce-a").expect("bind");
     handle_authenticated(
         &mut core,
         &mut session,

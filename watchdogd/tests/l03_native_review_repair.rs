@@ -43,7 +43,7 @@ fn open_core(dir: &Path, bundle: &FakeBundle) -> WatchdogCore {
 }
 
 fn bootstrap_session(
-    core: &WatchdogCore,
+    core: &mut WatchdogCore,
     bundle: &FakeBundle,
     tx: &str,
     epoch: u64,
@@ -123,7 +123,7 @@ fn native_review_missing_high_water_after_open_fails_closed() {
         "open must initialize epoch high-water"
     );
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-missing-hw", 1, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-missing-hw", 1, "lease1", 100);
     fs::remove_file(store.join(EPOCH_HIGH_WATER_REL)).expect("delete high-water");
     let err = handle_authenticated(
         &mut core,
@@ -168,7 +168,7 @@ fn native_review_trailing_high_water_corruption_fails_closed() {
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-trail", 1, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-trail", 1, "lease1", 100);
     let mut bytes = 1u64.to_be_bytes().to_vec();
     bytes.extend_from_slice(b"TRAILING_GARBAGE");
     fs::write(store.join(EPOCH_HIGH_WATER_REL), &bytes).expect("corrupt high-water");
@@ -208,7 +208,7 @@ fn native_review_decision_is_single_shot() {
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-single", 1, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-single", 1, "lease1", 100);
     handle_authenticated(
         &mut core,
         &mut session,
@@ -270,7 +270,8 @@ fn native_review_restart_rejects_conflicting_rebind() {
     let dir = scratch_dir("native-rebind");
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-a", 1, "lease-a", 100);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-a", 1, "lease-a", 100);
     handle_authenticated(
         &mut core,
         &mut session,
@@ -287,13 +288,13 @@ fn native_review_restart_rejects_conflicting_rebind() {
     .expect("arm");
     let armed_before = armed_record_count(&decision_log_reader(&store));
     assert_eq!(armed_before, 1);
-    let reopened = WatchdogCore::reopen(core_config(&dir), dependencies_from(&bundle))
+    let mut reopened = WatchdogCore::reopen(core_config(&dir), dependencies_from(&bundle))
         .expect("reopen after arm");
     bundle
         .peer_cred
         .enqueue_cred(FakePeerCred::broker_cred(0, 0, 4243));
     let err = SessionState::bind(
-        &reopened,
+        &mut reopened,
         &bundle.peer_cred,
         &bundle.entropy,
         SessionBind::new(
@@ -327,7 +328,7 @@ fn native_review_timely_renewal_extends_lease_window() {
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-renew", 1, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-renew", 1, "lease1", 100);
     handle_authenticated(
         &mut core,
         &mut session,
@@ -393,7 +394,7 @@ fn native_review_restart_preserves_chosen_authority_refuses_repeat() {
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-repeat", 1, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-repeat", 1, "lease1", 100);
     handle_authenticated(
         &mut core,
         &mut session,
@@ -419,7 +420,7 @@ fn native_review_restart_preserves_chosen_authority_refuses_repeat() {
     let mut reopened = WatchdogCore::reopen(core_config(&dir), dependencies_from(&bundle))
         .expect("reopen after decision");
     let (mut session2, established2) =
-        bootstrap_session(&reopened, &bundle, "tx-repeat", 1, "lease1", 100);
+        bootstrap_session(&mut reopened, &bundle, "tx-repeat", 1, "lease1", 100);
     let err = handle_authenticated(
         &mut reopened,
         &mut session2,

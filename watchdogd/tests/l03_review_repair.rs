@@ -44,7 +44,7 @@ fn open_core(dir: &Path, bundle: &FakeBundle) -> WatchdogCore {
 }
 
 fn bootstrap_session(
-    core: &WatchdogCore,
+    core: &mut WatchdogCore,
     bundle: &FakeBundle,
     tx: &str,
     epoch: u64,
@@ -216,7 +216,8 @@ fn review_f2_runtime_safe_mode_persists_durable_marker() {
     let dir = scratch_dir("review-f2");
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-sm", 1, "lease1", 100);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-sm", 1, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -266,7 +267,8 @@ fn review_f3_ambiguous_epoch_temp_enters_safe_mode() {
     fs::create_dir_all(store.join("epoch")).expect("epoch dir");
     fs::write(store.join("epoch/.tmp-epoch"), b"stale").expect("stale temp");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-tmp", 2, "lease1", 100);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-tmp", 2, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -275,7 +277,7 @@ fn review_f3_ambiguous_epoch_temp_enters_safe_mode() {
         arm_request(
             "req-arm-tmp",
             "tx-tmp",
-            2,
+            established.epoch,
             "base-a",
             bundle.clock.now() + Duration::from_secs(60),
         ),
@@ -293,7 +295,7 @@ fn review_f3_stale_epoch_below_high_water_refused_on_arm() {
     write_epoch_file(&store, 10);
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-stale", 5, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-stale", 5, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -355,7 +357,7 @@ fn review_f5_fence_wait_failure_latches_safe_mode() {
     let dir = scratch_dir("review-f5-wait");
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-fence", 1, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-fence", 1, "lease1", 100);
     handle_authenticated(
         &mut core,
         &mut session,
@@ -422,7 +424,8 @@ fn review_f7_moved_base_rejected_at_decision_time() {
     bundle.invariants.push_outcome(Ok(InvariantOutcome::Pass));
     let dir = scratch_dir("review-f7-base");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-base", 1, "lease1", 100);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-base", 1, "lease1", 100);
     handle_authenticated(
         &mut core,
         &mut session,
@@ -456,7 +459,8 @@ fn review_f7_expired_arming_deadline_rejected_at_decision() {
     let dir = scratch_dir("review-f7-deadline");
     let mut core = open_core(&dir, &bundle);
     let deadline = bundle.clock.now() + Duration::from_secs(5);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-dead", 1, "lease1", 100);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-dead", 1, "lease1", 100);
     handle_authenticated(
         &mut core,
         &mut session,
@@ -484,7 +488,7 @@ fn review_f15_late_lease_renewal_rejected() {
     let mut core = open_core(&dir, &bundle);
     let deadline = bundle.clock.now() + Duration::from_secs(5);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-renew", 1, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-renew", 1, "lease1", 100);
     handle_authenticated(
         &mut core,
         &mut session,
@@ -547,7 +551,7 @@ fn review_f9_arm_epoch_must_match_durable_high_water_not_session_only() {
     write_epoch_file(&store, 8);
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-epoch", 3, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-epoch", 3, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -578,7 +582,7 @@ fn review_f15_corrupt_log_at_decision_enters_safe_mode() {
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-corrupt", 1, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-corrupt", 1, "lease1", 100);
     handle_authenticated(
         &mut core,
         &mut session,

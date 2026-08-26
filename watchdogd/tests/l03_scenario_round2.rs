@@ -47,7 +47,7 @@ fn open_core(dir: &Path, bundle: &FakeBundle) -> WatchdogCore {
 }
 
 fn bootstrap_session(
-    core: &WatchdogCore,
+    core: &mut WatchdogCore,
     bundle: &FakeBundle,
     tx: &str,
     epoch: u64,
@@ -263,7 +263,7 @@ fn g2_authority_append_fsync_failure_latches_safe_mode() {
     let dir = scratch_dir("g2-append-fsync");
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core_seeded(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -295,7 +295,7 @@ fn g2_epoch_temp_file_fsync_failure_latches_safe_mode() {
     let dir = scratch_dir("g2-epoch-tmp-fsync");
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core_seeded(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -327,7 +327,7 @@ fn g2_epoch_parent_dir_fsync_failure_latches_safe_mode() {
     let dir = scratch_dir("g2-epoch-dir-fsync");
     let store = core_config(&dir).store_root.clone();
     let mut core = open_core_seeded(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -362,7 +362,8 @@ fn g2_safe_mode_marker_persist_failure_keeps_in_memory_latch() {
         .durability
         .fail_on_file_fsync_invocation(OPEN_WITHOUT_STARTUP_FSYNCS + 1);
     let mut core = open_core_seeded(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-tmp", 2, "lease1", 100);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-tmp", 2, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -371,7 +372,7 @@ fn g2_safe_mode_marker_persist_failure_keeps_in_memory_latch() {
         arm_request(
             "req-arm-tmp",
             "tx-tmp",
-            2,
+            established.epoch,
             "base-a",
             bundle.clock.now() + Duration::from_secs(60),
         ),
@@ -398,7 +399,7 @@ fn g3_epoch_temp_parent_matches_high_water_parent_and_dir_fsynced() {
     let epoch_parent = epoch_target.parent().expect("epoch parent").to_path_buf();
 
     let mut core = open_core_seeded(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     handle_authenticated(
         &mut core,
         &mut session,
@@ -452,7 +453,8 @@ fn g3_safe_mode_temp_parent_matches_marker_parent_and_dir_fsynced() {
     fs::write(store.join("epoch/.tmp-epoch"), b"stale").expect("legacy stale temp");
 
     let mut core = open_core_seeded(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-sm", 2, "lease1", 100);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-sm", 2, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -461,7 +463,7 @@ fn g3_safe_mode_temp_parent_matches_marker_parent_and_dir_fsynced() {
         arm_request(
             "req-arm-safe",
             "tx-sm",
-            2,
+            established.epoch,
             "base-b",
             bundle.clock.now() + Duration::from_secs(60),
         ),
@@ -503,7 +505,8 @@ fn g3_stale_unique_epoch_temp_in_target_dir_latches_safe_mode() {
         .expect("stale unique epoch temp");
 
     let mut core = open_core_seeded(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-uniq", 2, "lease1", 100);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-uniq", 2, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -512,7 +515,7 @@ fn g3_stale_unique_epoch_temp_in_target_dir_latches_safe_mode() {
         arm_request(
             "req-arm-uniq",
             "tx-uniq",
-            2,
+            established.epoch,
             "base-a",
             bundle.clock.now() + Duration::from_secs(60),
         ),
@@ -531,7 +534,8 @@ fn g3_legacy_epoch_temp_refusal_preserved() {
     fs::write(store.join("epoch/.tmp-epoch"), b"stale").expect("legacy stale temp");
 
     let mut core = open_core_seeded(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-leg", 2, "lease1", 100);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-leg", 2, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -540,7 +544,7 @@ fn g3_legacy_epoch_temp_refusal_preserved() {
         arm_request(
             "req-arm-leg",
             "tx-leg",
-            2,
+            established.epoch,
             "base-a",
             bundle.clock.now() + Duration::from_secs(60),
         ),
@@ -580,7 +584,7 @@ fn g3_epoch_advance_durability_order_is_fsync_rename_dir_fsync_readback() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("g3-epoch-order");
     let mut core = open_core_seeded(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let ops_before = bundle.durability.ops.lock().expect("lock").len();
     handle_authenticated(
         &mut core,
@@ -609,7 +613,8 @@ fn g3_safe_mode_marker_durability_order_is_fsync_rename_dir_fsync_readback() {
     fs::create_dir_all(store.join("epoch")).expect("epoch dir");
     fs::write(store.join("epoch/.tmp-epoch"), b"stale").expect("legacy stale temp");
     let mut core = open_core_seeded(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-sm", 2, "lease1", 100);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-sm", 2, "lease1", 100);
     let ops_before = bundle.durability.ops.lock().expect("lock").len();
     let err = handle_authenticated(
         &mut core,
@@ -619,7 +624,7 @@ fn g3_safe_mode_marker_durability_order_is_fsync_rename_dir_fsync_readback() {
         arm_request(
             "req-arm-safe-order",
             "tx-sm",
-            2,
+            established.epoch,
             "base-b",
             bundle.clock.now() + Duration::from_secs(60),
         ),

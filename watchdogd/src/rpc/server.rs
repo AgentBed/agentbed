@@ -59,8 +59,9 @@ impl RpcServer {
             .stream_peer
             .peer_credentials_for_stream(&stream)
             .map_err(|_| RpcError::WrongPeer)?;
+        let entropy = core.deps.entropy.clone();
         let (mut session, established) =
-            SessionState::bind_with_stream_cred(core, &cred, &*core.deps.entropy, bind)?;
+            SessionState::bind_with_stream_cred(core, &cred, &*entropy, bind)?;
         let est_frame = encode_session_established(&established)?;
         stream
             .write_all(&est_frame)

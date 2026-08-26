@@ -24,7 +24,7 @@ pub struct BoundSession {
 
 impl SessionState {
     #[allow(clippy::similar_names)]
-    pub fn try_bind(
+    pub(crate) fn try_bind(
         broker_uid: u32,
         broker_gid: u32,
         safe_mode: bool,

@@ -65,7 +65,7 @@ fn session_bind(tx: &str, epoch: u64, lease_id: &str, worker_group_tag: u32) -> 
 }
 
 fn bootstrap_session(
-    core: &WatchdogCore,
+    core: &mut WatchdogCore,
     bundle: &FakeBundle,
     tx: &str,
     epoch: u64,
@@ -300,7 +300,7 @@ fn l03_ac02_arm_through_daemon_appends_armed_record_only() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-log");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -321,7 +321,7 @@ fn l03_ac02_fsync_failure_refuses_arm_without_new_record() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-log");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     bundle.durability.fail_on(common::DurabilityOp::FileFsync);
     let err = handle_authenticated(
@@ -348,7 +348,7 @@ fn l03_ac02_dir_fsync_failure_refuses_arm_without_new_record() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-log");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     bundle.durability.fail_on(common::DurabilityOp::DirFsync);
     let err = handle_authenticated(
@@ -380,7 +380,7 @@ fn l03_ac03_epoch_rollback_below_external_floor_enters_safe_mode() {
     let mut core = open_core(&dir, &bundle);
     let epoch_path = config.store_root.join(EPOCH_HIGH_WATER_REL);
     let initial_epoch = fs::read(&epoch_path).expect("initial epoch after open");
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -437,7 +437,7 @@ fn l03_ac03_rename_failure_on_epoch_allocate_refuses_arm() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-epoch");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     bundle
         .durability
@@ -463,7 +463,7 @@ fn l03_ac03_readback_failure_on_epoch_allocate_refuses_arm() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-epoch");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     bundle.durability.fail_on(common::DurabilityOp::Readback);
     let err = handle_authenticated(
@@ -490,7 +490,7 @@ fn l03_ac03_epoch_log_mismatch_enters_safe_mode() {
     let mut core = open_core(&dir, &bundle);
     let epoch_path = config.store_root.join(EPOCH_HIGH_WATER_REL);
     let initial_epoch = fs::read(&epoch_path).expect("initial epoch after open");
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -512,13 +512,13 @@ fn l03_ac03_epoch_ahead_of_log_mismatch_enters_safe_mode() {
     let config_a = core_config(&dir_a);
     let mut core_a = open_core(&dir_a, &bundle_a);
     let (mut session_a, established_a) =
-        bootstrap_session(&core_a, &bundle_a, "tx-ahead", 7, "lease7", 107);
+        bootstrap_session(&mut core_a, &bundle_a, "tx-ahead", 7, "lease7", 107);
     handle_authenticated(
         &mut core_a,
         &mut session_a,
         &established_a,
         1,
-        arm_request("req-arm-ahead", "tx-ahead", 7, "base-a"),
+        arm_request("req-arm-ahead", "tx-ahead", established_a.epoch, "base-a"),
     )
     .expect("arm advances epoch in store A");
     let advanced_epoch = fs::read(config_a.store_root.join(EPOCH_HIGH_WATER_REL))
@@ -556,7 +556,7 @@ fn l03_ac03_corrupt_decision_log_on_reopen_enters_safe_mode() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-corrupt");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -581,8 +581,8 @@ const PROTOCOL_SRC: &str =
 fn l03_ac04_request_kinds_round_trip_through_codec() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-codec");
-    let core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let mut core = open_core(&dir, &bundle);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     assert_request_round_trip(
         &mut session,
@@ -646,8 +646,8 @@ fn l03_ac04_protocol_source_excludes_disarm_oob() {
 fn l03_ac04_oversize_frame_rejected() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-oversize");
-    let core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let mut core = open_core(&dir, &bundle);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let frame = encode_request(
         &arm_request("req-arm-1", "tx1", 1, "base-a"),
         &established,
@@ -664,8 +664,8 @@ fn l03_ac04_oversize_frame_rejected() {
 fn l03_ac04_malformed_frame_rejected() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-malformed");
-    let core = open_core(&dir, &bundle);
-    let (mut session, _) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let mut core = open_core(&dir, &bundle);
+    let (mut session, _) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let err = decode_request(b"not-a-frame", &mut session).expect_err("malformed");
     assert!(matches!(err, RpcError::MalformedFrame));
 }
@@ -675,7 +675,7 @@ fn l03_ac04_replay_counter_rejected_after_arm() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-replay");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -709,8 +709,8 @@ fn l03_ac04_replay_counter_rejected_after_arm() {
 fn l03_ac04_session_bind_establishes_capability() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-bind");
-    let core = open_core(&dir, &bundle);
-    let (session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let mut core = open_core(&dir, &bundle);
+    let (session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     assert_eq!(established.counter(), 0);
     assert!(!established.capability().is_empty());
     let _ = session;
@@ -725,13 +725,13 @@ fn l03_ac04_session_bind_establishes_capability() {
 fn l03_ac04_session_bind_stale_reconnect_refused() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-bind");
-    let core = open_core(&dir, &bundle);
-    let (_session, _established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let mut core = open_core(&dir, &bundle);
+    let (_session, _established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     bundle
         .peer_cred
         .enqueue_cred(FakePeerCred::broker_cred(0, 0, 4243));
     let err = SessionState::bind(
-        &core,
+        &mut core,
         &bundle.peer_cred,
         &bundle.entropy,
         session_bind("tx-stale", 99, "lease-x", 200),
@@ -748,7 +748,7 @@ fn l03_ac04_capability_counter_binding_refused() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-bind");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let err = handle_authenticated(
         &mut core,
         &mut session,
@@ -772,9 +772,9 @@ fn l03_ac04_peercred_refused_before_session_bind() {
         pid: 1,
     });
     let dir = scratch_dir("l03-peer");
-    let core = open_core(&dir, &bundle);
+    let mut core = open_core(&dir, &bundle);
     let err = SessionState::bind(
-        &core,
+        &mut core,
         &bundle.peer_cred,
         &bundle.entropy,
         session_bind("tx1", 1, "lease1", 100),
@@ -806,8 +806,8 @@ fn l03_ac04_socket_permissions_are_0700_parent_0600_socket() {
 fn l03_ac04_frame_codec_bad_length_crc_version() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-frame");
-    let core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let mut core = open_core(&dir, &bundle);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let frame = encode_request(
         &arm_request("req-arm-1", "tx1", 1, "base-a"),
         &established,
@@ -839,8 +839,8 @@ fn l03_ac04_frame_codec_bad_length_crc_version() {
 fn l03_ac04_deny_unknown_json_field_via_frame_codec() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-deny-unknown");
-    let core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let mut core = open_core(&dir, &bundle);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let frame = encode_request(
         &arm_request("req-arm-1", "tx1", 1, "base-a"),
         &established,
@@ -857,7 +857,7 @@ fn l03_ac04_response_binding_mismatch_refused() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-binding");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let counter = 1u64;
     let req = arm_request("req-arm-1", "tx1", 1, "base-a");
     let resp = handle_authenticated(&mut core, &mut session, &established, counter, req.clone())
@@ -908,7 +908,7 @@ fn l03_ac05_moved_base_rejected_before_first_armed_record() {
     bundle.base_revision.set_observed("base-observed");
     let dir = scratch_dir("l03-arm");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     let err = handle_authenticated(
         &mut core,
@@ -931,7 +931,7 @@ fn l03_ac05_duplicate_conflicting_arm_rejected_without_new_record() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-arm");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -961,7 +961,7 @@ fn l03_ac05_wrong_epoch_rejected() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-arm");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     let err = handle_authenticated(
         &mut core,
@@ -979,7 +979,7 @@ fn l03_ac05_weakened_mandatory_invariant_rejected() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-arm");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     let err = handle_authenticated(
         &mut core,
@@ -1011,7 +1011,7 @@ fn l03_ac05_expired_arming_deadline_rejected() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-arm");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     let err = handle_authenticated(
         &mut core,
@@ -1047,7 +1047,7 @@ fn l03_ac06_watchdog_chooses_begin_commit_on_separate_tx() {
     let dir = scratch_dir("l03-commit");
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-commit", 1, "lease1", 100);
+        bootstrap_session(&mut core, &bundle, "tx-commit", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -1085,14 +1085,14 @@ fn l03_ac06_watchdog_chooses_begin_revert_on_separate_tx() {
     let dir = scratch_dir("l03-revert");
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-revert", 2, "lease2", 101);
+        bootstrap_session(&mut core, &bundle, "tx-revert", 2, "lease2", 101);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
         &mut session,
         &established,
         counter,
-        arm_request("req-arm-revert", "tx-revert", 2, "base-a"),
+        arm_request("req-arm-revert", "tx-revert", established.epoch, "base-a"),
     )
     .expect("arm");
     counter += 1;
@@ -1101,7 +1101,7 @@ fn l03_ac06_watchdog_chooses_begin_revert_on_separate_tx() {
         &mut session,
         &established,
         counter,
-        trigger_decision("req-decide-revert", "tx-revert", 2),
+        trigger_decision("req-decide-revert", "tx-revert", established.epoch),
     )
     .expect("decide");
     assert!(matches!(
@@ -1121,7 +1121,7 @@ fn l03_ac06_unknown_transaction_rejected() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-unknown-tx");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -1156,7 +1156,7 @@ fn l03_ac06_stale_epoch_refused_on_same_transaction() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-stale-epoch");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -1189,7 +1189,7 @@ fn l03_ac07_heartbeat_wrong_binding_rejected() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-hb");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -1225,7 +1225,7 @@ fn l03_ac07_clock_regression_rejected() {
     bundle.clock.advance(Duration::from_secs(3600));
     let dir = scratch_dir("l03-clock");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
@@ -1273,14 +1273,14 @@ fn l03_ac08_expired_lease_fence_order_before_begin_revert() {
         .observe_log_at_inspection(log_path.clone());
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-fence", 3, "lease3", 102);
+        bootstrap_session(&mut core, &bundle, "tx-fence", 3, "lease3", 102);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
         &mut session,
         &established,
         counter,
-        arm_request("req-arm-fence", "tx-fence", 3, "base-a"),
+        arm_request("req-arm-fence", "tx-fence", established.epoch, "base-a"),
     )
     .expect("arm");
     counter += 1;
@@ -1290,7 +1290,7 @@ fn l03_ac08_expired_lease_fence_order_before_begin_revert() {
         &mut session,
         &established,
         counter,
-        trigger_decision("req-decide-fence", "tx-fence", 3),
+        trigger_decision("req-decide-fence", "tx-fence", established.epoch),
     )
     .expect("decide");
     assert!(matches!(
@@ -1324,14 +1324,14 @@ fn l03_ac08_surviving_group_prevents_begin_revert() {
     let dir = scratch_dir("l03-fence");
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) =
-        bootstrap_session(&core, &bundle, "tx-survive", 4, "lease4", 103);
+        bootstrap_session(&mut core, &bundle, "tx-survive", 4, "lease4", 103);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
         &mut session,
         &established,
         counter,
-        arm_request("req-arm-survive", "tx-survive", 4, "base-a"),
+        arm_request("req-arm-survive", "tx-survive", established.epoch, "base-a"),
     )
     .expect("arm");
     counter += 1;
@@ -1341,7 +1341,7 @@ fn l03_ac08_surviving_group_prevents_begin_revert() {
         &mut session,
         &established,
         counter,
-        trigger_decision("req-decide-survive", "tx-survive", 4),
+        trigger_decision("req-decide-survive", "tx-survive", established.epoch),
     )
     .expect_err("survivor");
     assert!(matches!(err, RpcError::FenceIncomplete));
@@ -1358,14 +1358,15 @@ fn l03_ac08_nonzero_jobs_prevents_begin_revert() {
     bundle.job_inspector.push_count(Ok(2));
     let dir = scratch_dir("l03-fence");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-jobs", 5, "lease5", 104);
+    let (mut session, established) =
+        bootstrap_session(&mut core, &bundle, "tx-jobs", 5, "lease5", 104);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
         &mut session,
         &established,
         counter,
-        arm_request("req-arm-jobs", "tx-jobs", 5, "base-a"),
+        arm_request("req-arm-jobs", "tx-jobs", established.epoch, "base-a"),
     )
     .expect("arm");
     counter += 1;
@@ -1375,7 +1376,7 @@ fn l03_ac08_nonzero_jobs_prevents_begin_revert() {
         &mut session,
         &established,
         counter,
-        trigger_decision("req-decide-jobs", "tx-jobs", 5),
+        trigger_decision("req-decide-jobs", "tx-jobs", established.epoch),
     )
     .expect_err("jobs");
     assert!(matches!(err, RpcError::FenceIncomplete));
@@ -1391,7 +1392,7 @@ fn l03_ac09_restart_reconstructs_log_sequence() {
     let bundle = FakeBundle::new();
     let dir = scratch_dir("l03-restart");
     let mut core = open_core(&dir, &bundle);
-    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
     handle_authenticated(
         &mut core,
