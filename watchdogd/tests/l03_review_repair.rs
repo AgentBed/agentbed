@@ -103,11 +103,33 @@ fn write_framed_record(path: &Path, sequence: u64, epoch: u64, kind: AuthorityRe
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("parent");
     }
-    let payload = serde_json::json!({
-        "sequence": sequence,
-        "epoch": epoch,
-        "kind": kind,
-    });
+    let payload = match kind {
+        AuthorityRecordKind::Armed => serde_json::json!({
+            "sequence": sequence,
+            "epoch": epoch,
+            "kind": kind,
+            "host_id": "host-test",
+            "tx_id": "tx-review",
+            "base": "base-a",
+            "lease_id": "lease1",
+            "worker_group_tag": 100,
+            "armed_at_secs": 1_700_000_000u64,
+            "armed_at_nanos": 0,
+            "deadline_secs": 1_800_000_000u64,
+            "deadline_nanos": 0,
+            "lease_expires_at_secs": 1_700_003_600u64,
+            "lease_expires_at_nanos": 0,
+        }),
+        _ => serde_json::json!({
+            "sequence": sequence,
+            "epoch": epoch,
+            "kind": kind,
+            "host_id": "host-test",
+            "tx_id": "tx-review",
+            "lease_id": "lease1",
+            "worker_group_tag": 100,
+        }),
+    };
     let payload = serde_json::to_vec(&payload).expect("json");
     let length = u32::try_from(payload.len()).expect("length");
     let mut frame = Vec::new();

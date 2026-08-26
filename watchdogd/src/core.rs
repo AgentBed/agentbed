@@ -5,7 +5,10 @@ use crate::durability_store::{
 };
 use crate::error::{DurabilityError, ExternalFloorError, RpcError, TopologyError, WatchdogError};
 use crate::interfaces::{Dependencies, FenceStage, InvariantOutcome, SignalKind};
-use crate::read_model::{append_record, AuthorityRecordKind, DecisionLogReader};
+use crate::read_model::{
+    append_record, armed_record, decision_record, lease_renewed_record, AuthorityRecord,
+    AuthorityRecordKind, DecisionLogReader,
+};
 use crate::rpc::protocol::{
     AuthenticatedRequest, LocalRequest, LocalResponse, SessionBind, SessionEstablished,
 };
@@ -15,7 +18,7 @@ use std::cell::RefCell;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const WATCHDOG_MOUNT_ROOT: &str = "/var/lib/agentbed/watchdog";
 pub const DECISION_LOG_REL: &str = "decisions/decision.log";
@@ -34,15 +37,19 @@ pub struct CoreConfig {
     pub host_id: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ArmedState {
+    host_id: String,
     tx_id: String,
     epoch: u64,
     base: String,
     lease_id: String,
     worker_group_tag: WorkerGroupTag,
+    #[allow(dead_code)]
     armed_at: SystemTime,
     deadline: SystemTime,
+    lease_expires_at: SystemTime,
+    chosen: Option<AuthorityRecordKind>,
 }
 
 #[derive(Debug)]
@@ -137,15 +144,53 @@ impl WatchdogCore {
             }
         }
 
+        let (durable_binding, armed, last_clock) =
+            Self::reopen_state(is_reopen, log_reader.as_ref())?;
+        let log_seq = log_records as u64;
+
         Ok(Self {
             config,
             deps,
             safe_mode: false,
-            durable_binding: RefCell::new(None),
-            armed: None,
-            log_seq: log_records as u64,
-            last_clock: SystemTime::UNIX_EPOCH,
+            durable_binding: RefCell::new(durable_binding),
+            armed,
+            log_seq,
+            last_clock,
         })
+    }
+
+    fn reopen_state(
+        is_reopen: bool,
+        log_reader: Option<&DecisionLogReader>,
+    ) -> Result<(Option<BoundSession>, Option<ArmedState>, SystemTime), WatchdogError> {
+        let mut durable_binding = None;
+        let mut armed = None;
+        let mut last_clock = SystemTime::UNIX_EPOCH;
+        if is_reopen {
+            if let Some(reader) = log_reader {
+                if let Some(reconstructed) = reader
+                    .reconstruct_active_authority()
+                    .map_err(|_| WatchdogError::SafeModeActive)?
+                {
+                    let binding = reconstructed.binding.clone();
+                    last_clock = reconstructed.last_activity;
+                    armed = Some(ArmedState {
+                        host_id: binding.host_id.clone(),
+                        tx_id: binding.tx_id.clone(),
+                        epoch: binding.epoch,
+                        base: reconstructed.base,
+                        lease_id: binding.lease_id.clone(),
+                        worker_group_tag: binding.worker_group_tag,
+                        armed_at: reconstructed.armed_at,
+                        deadline: reconstructed.deadline,
+                        lease_expires_at: reconstructed.lease_expires_at,
+                        chosen: reconstructed.chosen,
+                    });
+                    durable_binding = Some(binding);
+                }
+            }
+        }
+        Ok((durable_binding, armed, last_clock))
     }
 
     pub fn read_decision_log_sequence(&self) -> u64 {
@@ -271,6 +316,16 @@ impl WatchdogCore {
         Ok(())
     }
 
+    fn read_durable_epoch_strict(&mut self) -> Result<u64, RpcError> {
+        let path = self.config.store_root.join(EPOCH_HIGH_WATER_REL);
+        if let Ok(epoch) = read_epoch_file(&path) {
+            Ok(epoch)
+        } else {
+            self.enter_safe_mode()?;
+            Err(RpcError::SafeModeActive)
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn handle_arm(
         &mut self,
@@ -291,8 +346,7 @@ impl WatchdogCore {
             return Err(RpcError::MovedBase);
         }
         Self::validate_manifest(mandatory_invariants, additive_manifest_checks)?;
-        let durable_epoch =
-            read_epoch_file(&self.config.store_root.join(EPOCH_HIGH_WATER_REL)).unwrap_or(0);
+        let durable_epoch = self.read_durable_epoch_strict()?;
         if epoch < durable_epoch {
             return Err(RpcError::StaleEpoch);
         }
@@ -312,8 +366,22 @@ impl WatchdogCore {
             (bound.lease_id.clone(), bound.worker_group_tag)
         };
         self.advance_epoch(epoch)?;
-        self.append_authority(AuthorityRecordKind::Armed, epoch)?;
+        let lease_expires_at = min_time(now + LEASE_DURATION, deadline);
+        let record = armed_record(
+            self.next_sequence()?,
+            epoch,
+            host_id,
+            tx_id,
+            base,
+            &lease_id,
+            worker_group_tag,
+            now,
+            deadline,
+            lease_expires_at,
+        );
+        self.append_record(record)?;
         self.armed = Some(ArmedState {
+            host_id: host_id.to_owned(),
             tx_id: tx_id.to_owned(),
             epoch,
             base: base.to_owned(),
@@ -321,6 +389,8 @@ impl WatchdogCore {
             worker_group_tag,
             armed_at: now,
             deadline,
+            lease_expires_at,
+            chosen: None,
         });
         self.last_clock = now;
         Ok(LocalResponse::Armed {
@@ -335,14 +405,24 @@ impl WatchdogCore {
         lease_id: &str,
         worker_group_tag: WorkerGroupTag,
     ) -> Result<(), RpcError> {
-        let (armed_tx, armed_epoch, armed_lease, armed_tag, armed_deadline) = {
+        let (
+            host_id,
+            armed_tx,
+            armed_epoch,
+            armed_lease,
+            armed_tag,
+            armed_deadline,
+            lease_expires_at,
+        ) = {
             let armed = self.armed.as_ref().ok_or(RpcError::UnknownTransaction)?;
             (
+                armed.host_id.clone(),
                 armed.tx_id.clone(),
                 armed.epoch,
                 armed.lease_id.clone(),
                 armed.worker_group_tag,
                 armed.deadline,
+                armed.lease_expires_at,
             )
         };
         if armed_tx != tx_id {
@@ -354,12 +434,37 @@ impl WatchdogCore {
         if armed_lease != lease_id || armed_tag != worker_group_tag {
             return Err(RpcError::WrongBinding);
         }
+        if self
+            .armed
+            .as_ref()
+            .is_some_and(|armed| armed.chosen.is_some())
+        {
+            return Err(RpcError::ConflictingRequest);
+        }
         let now = self.deps.clock.now();
         if now < self.last_clock {
             return Err(RpcError::ClockRegression);
         }
-        if now > armed_deadline {
+        if now >= lease_expires_at || now > armed_deadline {
             return Err(RpcError::ExpiredDeadline);
+        }
+        let new_expiry = min_time(now + LEASE_DURATION, armed_deadline);
+        if new_expiry <= lease_expires_at {
+            self.last_clock = now;
+            return Ok(());
+        }
+        let record = lease_renewed_record(
+            self.next_sequence()?,
+            epoch,
+            &host_id,
+            tx_id,
+            lease_id,
+            worker_group_tag,
+            new_expiry,
+        );
+        self.append_record(record)?;
+        if let Some(armed) = self.armed.as_mut() {
+            armed.lease_expires_at = new_expiry;
         }
         self.last_clock = now;
         Ok(())
@@ -371,15 +476,28 @@ impl WatchdogCore {
         tx_id: &str,
         epoch: u64,
     ) -> Result<LocalResponse, RpcError> {
-        let (armed_tx, armed_epoch, armed_base, armed_deadline, armed_at, _worker_group_tag) = {
+        let (
+            host_id,
+            armed_tx,
+            armed_epoch,
+            armed_base,
+            armed_deadline,
+            lease_expires_at,
+            armed_lease,
+            armed_tag,
+            chosen,
+        ) = {
             let armed = self.armed.as_ref().ok_or(RpcError::UnknownTransaction)?;
             (
+                armed.host_id.clone(),
                 armed.tx_id.clone(),
                 armed.epoch,
                 armed.base.clone(),
                 armed.deadline,
-                armed.armed_at,
+                armed.lease_expires_at,
+                armed.lease_id.clone(),
                 armed.worker_group_tag,
+                armed.chosen,
             )
         };
         if armed_tx != tx_id {
@@ -387,6 +505,9 @@ impl WatchdogCore {
         }
         if armed_epoch != epoch {
             return Err(RpcError::StaleEpoch);
+        }
+        if chosen.is_some() {
+            return Err(RpcError::ConflictingRequest);
         }
         let log_path = self.config.store_root.join(DECISION_LOG_REL);
         if log_path.exists() && DecisionLogReader::open(&log_path).is_err() {
@@ -398,10 +519,7 @@ impl WatchdogCore {
         if !observed.is_empty() && observed != armed_base {
             return Err(RpcError::MovedBase);
         }
-        let lease_expired = armed_at
-            .checked_add(LEASE_DURATION)
-            .is_some_and(|expiry| now > expiry);
-        if lease_expired {
+        if now >= lease_expires_at {
             self.run_fence()?;
         }
         if now > armed_deadline {
@@ -416,7 +534,19 @@ impl WatchdogCore {
             InvariantOutcome::Pass => AuthorityRecordKind::BeginCommit,
             InvariantOutcome::Fail => AuthorityRecordKind::BeginRevert,
         };
-        self.append_authority(kind, epoch)?;
+        let record = decision_record(
+            self.next_sequence()?,
+            epoch,
+            kind,
+            &host_id,
+            tx_id,
+            &armed_lease,
+            armed_tag,
+        );
+        self.append_record(record)?;
+        if let Some(armed) = self.armed.as_mut() {
+            armed.chosen = Some(kind);
+        }
         Ok(LocalResponse::AuthorityChosen {
             request_id: request_id.to_owned(),
             kind,
@@ -465,13 +595,14 @@ impl WatchdogCore {
         Ok(())
     }
 
-    fn append_authority(&mut self, kind: AuthorityRecordKind, epoch: u64) -> Result<(), RpcError> {
+    fn next_sequence(&self) -> Result<u64, RpcError> {
+        self.log_seq.checked_add(1).ok_or(RpcError::SafeModeActive)
+    }
+
+    fn append_record(&mut self, record: AuthorityRecord) -> Result<(), RpcError> {
         let path = self.config.store_root.join(DECISION_LOG_REL);
-        let sequence = self
-            .log_seq
-            .checked_add(1)
-            .ok_or(RpcError::SafeModeActive)?;
-        if let Err(error) = append_record(&path, sequence, epoch, kind, &*self.deps.durability) {
+        let sequence = record.sequence;
+        if let Err(error) = append_record(&path, &record, &*self.deps.durability) {
             self.latch_safe_mode_best_effort();
             return Err(RpcError::Durability(error));
         }
@@ -490,7 +621,7 @@ impl WatchdogCore {
             self.enter_safe_mode()?;
             return Err(RpcError::SafeModeActive);
         }
-        let current = read_epoch_file(&path).unwrap_or(0);
+        let current = self.read_durable_epoch_strict()?;
         if epoch < current {
             return Err(RpcError::StaleEpoch);
         }
@@ -585,19 +716,26 @@ impl SessionState {
     }
 }
 
+fn min_time(a: SystemTime, b: SystemTime) -> SystemTime {
+    if a <= b {
+        a
+    } else {
+        b
+    }
+}
+
 fn epoch_bytes(epoch: u64) -> Vec<u8> {
     epoch.to_be_bytes().to_vec()
 }
 
 fn read_epoch_file(path: &Path) -> Result<u64, WatchdogError> {
     let data = fs::read(path).map_err(|_| WatchdogError::EpochLogMismatch)?;
-    if data.len() < 8 {
+    if data.len() != 8 {
         return Err(WatchdogError::EpochLogMismatch);
     }
     let bytes: [u8; 8] = data
-        .get(..8)
-        .and_then(|slice| slice.try_into().ok())
-        .ok_or(WatchdogError::EpochLogMismatch)?;
+        .try_into()
+        .map_err(|_| WatchdogError::EpochLogMismatch)?;
     Ok(u64::from_be_bytes(bytes))
 }
 

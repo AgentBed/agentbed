@@ -268,9 +268,10 @@ fn l03_ac01_sealed_mount_root_constant() {
 const READ_MODEL_SRC: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/read_model.rs"));
 
-const EXPECTED_AUTHORITY_RECORD_KINDS: [AuthorityRecordKind; 6] = [
+const EXPECTED_AUTHORITY_RECORD_KINDS: [AuthorityRecordKind; 7] = [
     AuthorityRecordKind::Armed,
     AuthorityRecordKind::ProbationPassed,
+    AuthorityRecordKind::LeaseRenewed,
     AuthorityRecordKind::BeginCommit,
     AuthorityRecordKind::BeginRevert,
     AuthorityRecordKind::Committed,
@@ -278,11 +279,12 @@ const EXPECTED_AUTHORITY_RECORD_KINDS: [AuthorityRecordKind; 6] = [
 ];
 
 #[test]
-fn l03_ac02_authority_record_kind_lists_six_watchdog_owned_names() {
+fn l03_ac02_authority_record_kind_lists_seven_watchdog_owned_names() {
     for kind in EXPECTED_AUTHORITY_RECORD_KINDS {
         let name = match kind {
             AuthorityRecordKind::Armed => "Armed",
             AuthorityRecordKind::ProbationPassed => "ProbationPassed",
+            AuthorityRecordKind::LeaseRenewed => "LeaseRenewed",
             AuthorityRecordKind::BeginCommit => "BeginCommit",
             AuthorityRecordKind::BeginRevert => "BeginRevert",
             AuthorityRecordKind::Committed => "Committed",
