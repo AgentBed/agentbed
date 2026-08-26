@@ -1,5 +1,6 @@
-AGB-8 L03 epoch-allocation micro-RED evidence
+AGB-8 L03 epoch-allocation micro-RED evidence (contract-corrected)
 Rejected exact head: 52984ce7d7b044e41f4a810e660f54404e4ce758
+Parent RED commit corrected: 5b4030333c05a185ded1826d8b7e642c66756dec
 Base/merge-base: 01a4bf8c8de2a5cb4544bf74af9bb819c29adf1c
 Native review: ID 5032875711, agentos-reviewer (302623761), CHANGES_REQUESTED
 Captured: 2026-08-26 (bare/unpiped; production unchanged at 52984ce)
@@ -10,18 +11,24 @@ Causal failure: 3/3 epoch-allocation repair tests failed (0 passed)
 
 Table proposals exercised: 0, 4000000000
 
-Failing tests and causal output:
+Failing tests and all-observation causal output:
 1. fresh_bind_epoch_is_watchdog_issued_not_broker_selected
    - proposal 0: SessionEstablished.epoch=0 (expected 1); broker echoed
    - proposal 4000000000: SessionEstablished.epoch=4000000000 (expected 1); broker echoed
-   - high-water remained 0 before Arm (correct for bind-only phase)
+   - high-water remained 0 before Arm; no decision records before Arm
 2. broker_epoch_jump_cannot_mutate_high_water_or_append_armed
-   - malicious Arm with epoch 4000000000 succeeded (Armed response)
-   - high-water/advanced and ARMED appended on rejected code
+   - malicious Arm accepted-invalid: Armed { request_id: "req-arm-jump" }
+   - high-water mutation: observed 4000000000, expected 0
+   - decision log mutation: 1 ARMED record(s), record_count=1
+   - safe-mode marker: absent (no hostile-input latch)
 3. watchdog_issued_exact_successor_arms_and_persists_once
-   - SessionEstablished.epoch=4000000000 instead of watchdog-issued 1
+   - Arm executed with established.epoch=4000000000 (not pre-asserted)
+   - issuance mismatch: SessionEstablished.epoch=4000000000, expected 1
+   - high-water mismatch: observed 4000000000, expected issued successor 1
+   - Arm succeeded; record_count=1; ARMED present (path did arm at wrong epoch)
 
-Findings covered: broker-selected SessionBind epoch is authoritative (L03-AC03/AC04),
-broker can jump high-water via Arm without watchdog-issued successor (L03-AC06).
+Findings covered: broker SessionBind epoch echoed as authoritative (L03-AC03/AC04),
+malicious Arm mutates high-water and appends ARMED (L03-AC06),
+watchdog does not issue checked successor 1 (L03-AC03).
 
-GREEN not claimed. Production repair unauthorized pending epoch-allocation RED acceptance.
+GREEN not claimed. Production repair unauthorized pending corrected RED acceptance.

@@ -17,7 +17,7 @@ use agentbed_watchdogd::error::RpcError;
 use agentbed_watchdogd::interfaces::Clock;
 use agentbed_watchdogd::read_model::{AuthorityRecordKind, DecisionLogReader};
 use agentbed_watchdogd::rpc::protocol::{
-    decode_request, encode_request, LocalRequest, SessionBind,
+    decode_request, encode_request, LocalRequest, LocalResponse, SessionBind,
 };
 use agentbed_watchdogd::{CoreConfig, SessionState, WatchdogCore};
 use common::{
@@ -54,6 +54,35 @@ fn read_durable_high_water(store: &Path) -> u64 {
 
 fn decision_log_reader(store: &Path) -> DecisionLogReader {
     DecisionLogReader::open(store.join(DECISION_LOG_REL)).expect("decision log reader")
+}
+
+struct PostArmObservations {
+    high_water: u64,
+    safe_mode_present: bool,
+    record_count: usize,
+    armed_present: bool,
+}
+
+fn observe_post_arm(store: &Path) -> PostArmObservations {
+    let high_water = read_durable_high_water(store);
+    let safe_mode_present = store.join(SAFE_MODE_REL).exists();
+    let log_path = store.join(DECISION_LOG_REL);
+    if log_path.exists() {
+        let reader = decision_log_reader(store);
+        PostArmObservations {
+            high_water,
+            safe_mode_present,
+            record_count: reader.record_count(),
+            armed_present: reader.contains_kind(AuthorityRecordKind::Armed),
+        }
+    } else {
+        PostArmObservations {
+            high_water,
+            safe_mode_present,
+            record_count: 0,
+            armed_present: false,
+        }
+    }
 }
 
 fn bind_session(
@@ -198,7 +227,7 @@ fn broker_epoch_jump_cannot_mutate_high_water_or_append_armed() {
     )
     .expect("bind accepts malicious proposal on rejected code");
 
-    let err = handle_authenticated(
+    let arm_result = handle_authenticated(
         &mut core,
         &mut session,
         &established,
@@ -210,39 +239,47 @@ fn broker_epoch_jump_cannot_mutate_high_water_or_append_armed() {
             "base-jump",
             bundle.clock.now() + Duration::from_secs(7200),
         ),
-    )
-    .expect_err("malicious Arm must be refused");
-
-    assert!(
-        matches!(
-            err,
-            RpcError::WrongBinding | RpcError::WrongEpoch | RpcError::StaleEpoch
-        ),
-        "expected binding/epoch refusal, got {err:?}"
-    );
-    assert!(
-        !matches!(err, RpcError::SafeModeActive),
-        "hostile epoch must not latch safe mode: {err:?}"
-    );
-    assert!(
-        !store.join(SAFE_MODE_REL).exists(),
-        "hostile epoch must not persist safe-mode marker"
     );
 
-    assert_eq!(
-        read_durable_high_water(&store),
-        0,
-        "malicious Arm must not advance high-water"
-    );
+    let obs = observe_post_arm(&store);
+    let mut failures = Vec::new();
 
-    if store.join(DECISION_LOG_REL).exists() {
-        let reader = decision_log_reader(&store);
-        assert_eq!(
-            usize::from(reader.contains_kind(AuthorityRecordKind::Armed)),
-            0,
-            "malicious Arm must not append ARMED"
-        );
+    match arm_result {
+        Ok(response) => {
+            failures.push(format!("malicious Arm accepted-invalid: {response:?}"));
+        }
+        Err(err) => {
+            if !matches!(
+                err,
+                RpcError::WrongBinding | RpcError::WrongEpoch | RpcError::StaleEpoch
+            ) {
+                failures.push(format!("malicious Arm wrong refusal kind: {err:?}"));
+            }
+        }
     }
+
+    if obs.high_water != 0 {
+        failures.push(format!(
+            "high-water mutation: observed {}, expected 0",
+            obs.high_water
+        ));
+    }
+    if obs.safe_mode_present {
+        failures.push("safe-mode marker mutation after hostile Arm".to_string());
+    }
+    if obs.armed_present {
+        failures.push(format!(
+            "decision log mutation: {} ARMED record(s), record_count={}",
+            usize::from(obs.armed_present),
+            obs.record_count
+        ));
+    }
+
+    assert!(
+        failures.is_empty(),
+        "malicious Arm must be refused without mutating high-water/log/safe-mode: {}",
+        failures.join("; ")
+    );
 }
 
 // 3. Watchdog-issued exact successor arms and persists once.
@@ -264,14 +301,9 @@ fn watchdog_issued_exact_successor_arms_and_persists_once() {
     )
     .expect("bind");
 
-    assert_eq!(
-        established.epoch,
-        EXPECTED_ISSUED_EPOCH,
-        "watchdog must issue epoch {EXPECTED_ISSUED_EPOCH}, got {}",
-        established.epoch
-    );
+    let issued_epoch = established.epoch;
 
-    let response = handle_authenticated(
+    let arm_result = handle_authenticated(
         &mut core,
         &mut session,
         &established,
@@ -279,31 +311,49 @@ fn watchdog_issued_exact_successor_arms_and_persists_once() {
         arm_request(
             "req-arm-successor",
             "tx-successor",
-            established.epoch,
+            issued_epoch,
             "base-successor",
             bundle.clock.now() + Duration::from_secs(7200),
         ),
-    )
-    .expect("Arm with watchdog-issued successor must succeed");
-
-    assert!(
-        matches!(
-            response,
-            agentbed_watchdogd::rpc::protocol::LocalResponse::Armed { .. }
-        ),
-        "expected Armed response, got {response:?}"
     );
 
-    assert_eq!(
-        read_durable_high_water(&store),
-        EXPECTED_ISSUED_EPOCH,
-        "Arm must persist exact issued successor to high-water"
-    );
+    let obs = observe_post_arm(&store);
+    let mut failures = Vec::new();
 
-    let reader = decision_log_reader(&store);
-    assert_eq!(reader.record_count(), 1, "exactly one decision record must exist");
+    if issued_epoch != EXPECTED_ISSUED_EPOCH {
+        failures.push(format!(
+            "issuance mismatch: SessionEstablished.epoch={issued_epoch}, expected watchdog-issued {EXPECTED_ISSUED_EPOCH}"
+        ));
+    }
+
+    match arm_result {
+        Err(err) => failures.push(format!("Arm with established epoch failed: {err:?}")),
+        Ok(response) => {
+            if !matches!(response, LocalResponse::Armed { .. }) {
+                failures.push(format!("Arm wrong response: {response:?}"));
+            }
+        }
+    }
+
+    if obs.high_water != EXPECTED_ISSUED_EPOCH {
+        failures.push(format!(
+            "high-water mismatch: observed {}, expected issued successor {}",
+            obs.high_water, EXPECTED_ISSUED_EPOCH
+        ));
+    }
+    if obs.record_count != 1 {
+        failures.push(format!(
+            "log mismatch: record_count={}, expected 1",
+            obs.record_count
+        ));
+    }
+    if !obs.armed_present {
+        failures.push("log mismatch: ARMED record missing after Arm".to_string());
+    }
+
     assert!(
-        reader.contains_kind(AuthorityRecordKind::Armed),
-        "ARMED record must exist with issued successor epoch persisted to high-water"
+        failures.is_empty(),
+        "watchdog must issue exact successor 1, Arm successfully, and persist once: {}",
+        failures.join("; ")
     );
 }
