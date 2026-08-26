@@ -170,12 +170,16 @@ L03 delivers the **ordering/non-overlap contract** through injected hermetic `Pr
 Hermetic ordering contract (enforced via recording fakes, no real signals):
 
 1. `signal(Term)` on injected fencer.
-2. `bounded_wait` on injected fencer.
+2. `bounded_wait(Term)` on injected fencer.
 3. Observe `group_alive(AfterTerm)` — result **consumed**, not discarded.
-4. `signal(Kill)` on injected fencer.
-5. Observe `group_alive(AfterKill)`.
-6. `candidate_job_count` zero (injected `JobInspector`).
-7. Only then inspect durable state and emit recovery decision response.
+4. If no longer alive after Term → **skip Kill** and proceed to step 8 (job inventory).
+5. Only if still alive after AfterTerm → `signal(Kill)` on injected fencer.
+6. `bounded_wait(Kill)` on injected fencer.
+7. Observe `group_alive(AfterKill)` and require absent; any ambiguity or still-alive → safe mode/refusal.
+8. `candidate_job_count` zero (injected `JobInspector`).
+9. Only then inspect durable state and evaluate/emit recovery decision response.
+
+Any signal, wait, liveness, or job-inventory ambiguity or failure → safe mode/refusal with **no** `BEGIN_*` authority append or response. The recording fake in `fencing_seam.rs` must prove **both branches**: Term-success skips Kill (steps 1–4 → 8–9); Term-survivor requires Kill → bounded_wait(Kill) → confirmed AfterKill absence (steps 1–9).
 
 Failure at any step → safe mode / refusal. Expired lease must never overlap a surviving commit worker or revert (L03-AC08, AC09) — satisfied by construction when production fencing is unavailable and authority is refused.
 
@@ -205,7 +209,7 @@ Recorded now for the lane that reintroduces live fencing:
 | **L03-AC05** | `watchdogd/arming.rs`, `watchdogd/invariants.rs` | Arming validation matrix: moved base, wrong epoch, duplicate/conflicting arming (no new authority record), weakened mandatory invariants, expired deadline, ambiguity; additive manifest-only strictness |
 | **L03-AC06** | `watchdogd/authority.rs`, `broker/transaction/recovery.rs` (existing safe-mode on watchdog WAL) | Only watchdog selects `BEGIN_COMMIT`/`BEGIN_REVERT` from its own invariant/clock/lease evaluation; broker-supplied observations cannot override watchdog-owned evidence; duplicate/stale/unknown/malformed/moved-base/wrong-epoch/expired-lease/corrupt-log/ambiguous requests cannot cause or override decision; broker WAL with watchdog-owned states still fails closed |
 | **L03-AC07** | `watchdogd/lease.rs`, `watchdogd/auth.rs` | Lease renewal/expiry; heartbeat capability+counter binding; clock regression/replay/wrong-binding tests with deterministic fakes; local process auth only; production OOB signing not claimed |
-| **L03-AC08** | `watchdogd/fencing.rs`, `watchdogd/interfaces.rs`, `watchdogd/fakes/{process,job}.rs`, `watchdogd/tests/fencing_seam.rs` | Hermetic recording-fake ordering matrix: Term → bounded_wait → AfterTerm liveness (consumed) → Kill → AfterKill liveness → zero jobs; `UnavailableProcessGroupFencer` → safe mode with no authority record; source-level proof that `watchdogd/src/**` contains no `libc::kill`, `libc::waitpid`, `libc::killpg`, or `libc::sigqueue` and `fencing.rs` contains no `unsafe`; no overlap with revert. Real termination proof deferred to later daemon lane (watchdog-minted cgroup-v2 handles, `cgroup.kill`). **No spawned fixture; no real-signal tests on developer/login/shared-runner hosts.** |
+| **L03-AC08** | `watchdogd/fencing.rs`, `watchdogd/interfaces.rs`, `watchdogd/fakes/{process,job}.rs`, `watchdogd/tests/fencing_seam.rs` | Hermetic recording-fake ordering matrix: Term → bounded_wait(Term) → AfterTerm (consumed) → [if alive: Kill → bounded_wait(Kill) → AfterKill absent] → zero jobs → recovery decision; Term-success branch skips Kill; Term-survivor branch requires Kill→wait→confirmed absence; `UnavailableProcessGroupFencer` → safe mode with no authority record; source-level proof that `watchdogd/src/**` contains no `libc::kill`, `libc::waitpid`, `libc::killpg`, or `libc::sigqueue` and `fencing.rs` contains no `unsafe`; no overlap with revert. Real termination proof deferred to later daemon lane (watchdog-minted cgroup-v2 handles, `cgroup.kill`). **No spawned fixture; no real-signal tests on developer/login/shared-runner hosts.** |
 | **L03-AC09** | `watchdogd/tests/l03_failure_matrix.rs` (planned) | Hermetic matrix: corrupt/truncated log; epoch rollback/mismatch; stale/malformed/duplicate/unknown RPC; `SessionBind` stale reconnect; capability/counter/binding mismatch; bad frame length/CRC/version; deny-unknown JSON via frame codec; moved base; wrong epoch; expired lease; stopped heartbeat; process survivor; job survivor; every fsync/rename/readback boundary; unavailable store; restart reconstruction; safe-mode persistence |
 | **L03-AC10** | `watchdogd/interfaces.rs`, `watchdogd/fakes/`, PLAN non-goals §1 | All externals injected; tests need no root/NixOS/systemd/Proxmox/credentials; explicit statement: no hostile-root boundary, no Gate 1 exit evidence |
 | **L03-AC11** | `plans/AGB-8/{PLAN,RESULT,red-evidence}.md` | PLAN before production; RED tests/fixtures only against unchanged production; focused RED bare/unpiped with causal non-zero output; smallest GREEN; RESULT with exact current-head commands; DCO on every commit |
@@ -241,6 +245,8 @@ Recorded now for the lane that reintroduces live fencing:
 | Heartbeat wrong lease binding | Mismatched `lease_id`/`worker_group_tag` | Fail closed |
 | Clock regression | Decrease fake clock on renewal | Fail closed |
 | Lease expiry with live worker | `UnavailableProcessGroupFencer` or recording fake simulating survivor | Safe mode; no `BEGIN_*`; no authority record |
+| Fence Term-success (worker gone) | Recording fake: AfterTerm absent | Skip Kill; proceed to job inventory; no `BEGIN_*` until steps 8–9 complete |
+| Fence Term-survivor | Recording fake: AfterTerm alive, then Kill→wait→AfterKill absent | Full Kill branch required; no `BEGIN_*` until steps 8–9 complete |
 | Job survivor after fence | JobInspector reports non-zero | Safe mode; no recovery decision |
 | WorkerGroupTag decode rejection | Wire values `0`, `1`, negative, or `> i32::MAX` | Uniform `MalformedRequest`; no binding |
 | Fencing unavailable at expiry | Production `UnavailableProcessGroupFencer` | Safe mode; refuse authority; worker may survive but no `BEGIN_*` |
@@ -290,7 +296,7 @@ cargo test -p agentbed-broker --test l03_watchdog_client
 cargo test -p agentbed-adapter-nix --test l03_protected_broker_state
 ```
 
-RED checkpoint (fencing-safety repair): tests/fixtures/evidence only against unchanged production; delete `fencing_fixture.rs`; add `fencing_seam.rs`; preserve unpiped causal non-zero output in evidence. RED must fail causally on (a) missing `WorkerGroupTag`, (b) source-scan absence assertion while `libc::kill` still exists in `fencing.rs`.
+RED checkpoint (fencing-safety repair): tests/fixtures/evidence only against unchanged production; delete `fencing_fixture.rs`; add `fencing_seam.rs`; preserve unpiped causal non-zero output in evidence. RED must fail causally on (a) missing `WorkerGroupTag`, (b) source-scan absence assertion while `libc::kill` still exists in `fencing.rs`. `fencing_seam.rs` must discriminate both ordering branches: Term-success skips Kill; Term-survivor requires Kill → bounded_wait(Kill) → confirmed AfterKill absence.
 
 ### Named RED tests and evidence expectations (L03-AC04 subset)
 
