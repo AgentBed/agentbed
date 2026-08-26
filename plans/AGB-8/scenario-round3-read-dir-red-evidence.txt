@@ -1,0 +1,16 @@
+AGB-8 frozen G3 reopen — read_dir ambiguity RED evidence
+Parent head: f5532bf6ce7dd22261f5acd95d42113d22287838
+Bug: ambiguous_temp_residue returns false when read_dir fails (EACCES on mode-0300 parent) despite stale .tmp-epoch-* / .tmp-safe-mode-* present and create_new still succeeding.
+
+Command (bare, unpiped):
+  cargo test -p agentbed-watchdogd --test l03_scenario_round2 g3_unreadable_parent_dir_temp_residue_is_ambiguous
+
+Exit code: 101
+
+Causal failure:
+  g3_unreadable_parent_dir_temp_residue_is_ambiguous
+    - unreadable enumeration with stale epoch temp must be treated as ambiguous
+    - ambiguous_epoch_temp_residue(parent) returned false after read_dir PermissionDenied on mode-0300 parent with .tmp-epoch-stale present
+    - create_new probe temp succeeded independently (write+execute without read is sufficient for O_EXCL)
+
+Suite count after RED: 15 total in l03_scenario_round2 (14 pass, 1 fail on current production).

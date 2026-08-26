@@ -13,6 +13,9 @@
 
 mod common;
 
+use agentbed_watchdogd::durability_store::{
+    ambiguous_epoch_temp_residue, ambiguous_safe_mode_temp_residue,
+};
 use agentbed_watchdogd::error::{DurabilityError, RpcError, TopologyError};
 use agentbed_watchdogd::interfaces::{Clock, TopologyProbe};
 use agentbed_watchdogd::read_model::{AuthorityRecordKind, DecisionLogReader};
@@ -23,9 +26,10 @@ use common::{
     dependencies_from, scratch_dir, valid_worker_group_tag, DurabilityOp, FakeBundle, FakePeerCred,
     BROKER_STATE_ROOT, DECISION_LOG_REL, EPOCH_HIGH_WATER_REL, SAFE_MODE_REL,
 };
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 fn core_config(dir: &Path) -> CoreConfig {
@@ -624,6 +628,75 @@ fn g3_safe_mode_marker_durability_order_is_fsync_rename_dir_fsync_readback() {
     assert!(matches!(err, RpcError::SafeModeActive));
     let ops = durability_ops_since(&bundle, ops_before);
     assert_replacement_durability_order(&ops, "safe-mode marker persistence");
+}
+
+/// Restores directory owner permissions on drop so scratch cleanup can proceed.
+#[cfg(unix)]
+struct RestorableDirMode {
+    path: PathBuf,
+    original_mode: u32,
+}
+
+#[cfg(unix)]
+impl RestorableDirMode {
+    fn restrict_to_0300(path: &Path) -> Self {
+        let metadata = fs::metadata(path).expect("parent metadata");
+        let original_mode = metadata.permissions().mode() & 0o777;
+        let mut perms = metadata.permissions();
+        perms.set_mode(0o300);
+        fs::set_permissions(path, perms).expect("chmod parent to 0300");
+        Self {
+            path: path.to_path_buf(),
+            original_mode,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RestorableDirMode {
+    fn drop(&mut self) {
+        if let Ok(metadata) = fs::metadata(&self.path) {
+            let mut perms = metadata.permissions();
+            perms.set_mode(self.original_mode);
+            let _ = fs::set_permissions(&self.path, perms);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn g3_unreadable_parent_dir_temp_residue_is_ambiguous() {
+    let base = scratch_dir("g3-read-dir");
+    let parent = base.join("epoch");
+    fs::create_dir_all(&parent).expect("epoch parent");
+    fs::write(parent.join(".tmp-epoch-stale"), b"stale").expect("stale epoch temp");
+    fs::write(parent.join(".tmp-safe-mode-stale"), b"stale").expect("stale safe-mode temp");
+
+    let _guard = RestorableDirMode::restrict_to_0300(&parent);
+
+    let read_dir_err = fs::read_dir(&parent).expect_err("unreadable parent must fail read_dir");
+    assert_eq!(
+        read_dir_err.kind(),
+        ErrorKind::PermissionDenied,
+        "read_dir on mode-0300 parent must fail with EACCES"
+    );
+
+    let probe = parent.join(".tmp-epoch-probe");
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .expect("create_new temp must succeed without directory read permission");
+    let _ = fs::remove_file(&probe);
+
+    assert!(
+        ambiguous_epoch_temp_residue(&parent),
+        "unreadable enumeration with stale epoch temp must be treated as ambiguous"
+    );
+    assert!(
+        ambiguous_safe_mode_temp_residue(&parent),
+        "unreadable enumeration with stale safe-mode temp must be treated as ambiguous"
+    );
 }
 
 // Reference sealed domains for source-contract readability (not executed).
