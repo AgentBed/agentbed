@@ -141,6 +141,16 @@ fn request_id_of(req: &LocalRequest) -> &str {
     }
 }
 
+fn request_kind_of(req: &LocalRequest) -> RequestKind {
+    match req {
+        LocalRequest::Arm { .. } => RequestKind::Arm,
+        LocalRequest::ReportHealth { .. } => RequestKind::ReportHealth,
+        LocalRequest::RequestLeaseRenewal { .. } => RequestKind::RequestLeaseRenewal,
+        LocalRequest::Heartbeat { .. } => RequestKind::Heartbeat,
+        LocalRequest::RequestDecision { .. } => RequestKind::RequestDecision,
+    }
+}
+
 fn arm_deadline(bundle: &FakeBundle) -> SystemTime {
     bundle.clock.now() + Duration::from_secs(3600)
 }
@@ -354,6 +364,8 @@ fn cross_transaction_arm_cannot_persist_payload_tx_or_mutate_authority() {
 
     let mut decode_outcome = String::from("decode_not_attempted");
     let mut handle_outcome = String::from("handle_not_attempted");
+    let mut decode_typed_refusal = false;
+    let mut handle_typed_refusal = false;
 
     match decode_request(&frame, &mut session) {
         Ok(verified) => {
@@ -363,6 +375,7 @@ fn cross_transaction_arm_cannot_persist_payload_tx_or_mutate_authority() {
                     handle_outcome = format!("handle_accepted_invalid: {:?}", resp);
                 }
                 Err(err) if is_payload_binding_rejection(&err) => {
+                    handle_typed_refusal = true;
                     handle_outcome = format!("handle_refused: {:?}", err);
                 }
                 Err(err) => {
@@ -371,6 +384,7 @@ fn cross_transaction_arm_cannot_persist_payload_tx_or_mutate_authority() {
             }
         }
         Err(err) if is_payload_binding_rejection(&err) => {
+            decode_typed_refusal = true;
             decode_outcome = format!("decode_refused: {:?}", err);
         }
         Err(err) => {
@@ -380,12 +394,33 @@ fn cross_transaction_arm_cannot_persist_payload_tx_or_mutate_authority() {
 
     let obs = observe_authority(&store);
     let mut failures = Vec::new();
-    if decode_outcome == "decode_accepted_invalid" {
-        failures.push("hostile cross-tx Arm decode accepted-invalid payload".to_owned());
+
+    if decode_outcome == "decode_not_attempted" {
+        failures.push("decode_not_attempted".to_owned());
     }
-    if handle_outcome.starts_with("handle_accepted_invalid") {
+    if decode_outcome == "decode_accepted_invalid" {
+        failures.push("decode_accepted_invalid".to_owned());
+    }
+    if decode_outcome.starts_with("decode_wrong_error:") {
+        failures.push(decode_outcome.clone());
+    }
+    if handle_outcome.starts_with("handle_accepted_invalid:") {
         failures.push(handle_outcome.clone());
     }
+    if handle_outcome.starts_with("handle_wrong_error:") {
+        failures.push(handle_outcome.clone());
+    }
+    if decode_typed_refusal && handle_outcome != "handle_not_attempted" {
+        failures.push(format!(
+            "handle ran after typed decode refusal: {handle_outcome}"
+        ));
+    }
+    if !decode_typed_refusal && !handle_typed_refusal {
+        failures.push(format!(
+            "no typed WrongBinding/WrongEpoch refusal at decode or handle (decode={decode_outcome}, handle={handle_outcome})"
+        ));
+    }
+
     if obs.high_water != 0 {
         failures.push(format!(
             "high-water mutation: observed {}, expected 0",
@@ -403,10 +438,6 @@ fn cross_transaction_arm_cannot_persist_payload_tx_or_mutate_authority() {
     }
     if obs.safe_mode_present {
         failures.push("safe-mode marker present".to_owned());
-    }
-    if !failures.is_empty() {
-        failures.insert(0, format!("decode_outcome={decode_outcome}"));
-        failures.insert(1, format!("handle_outcome={handle_outcome}"));
     }
 
     assert!(
@@ -450,12 +481,21 @@ fn exact_payload_binding_preserves_all_five_authenticated_round_trips() {
         let frame = encode_request(&req, &established, 1).expect("encode positive frame");
         match decode_request(&frame, &mut session) {
             Ok(verified) => {
-                if request_id_of(verified.request()) != req_id {
-                    failures.push(format!(
-                        "{label}: request_id mismatch after decode"
-                    ));
-                } else {
+                let id_ok = request_id_of(verified.request()) == req_id;
+                let kind_ok = request_kind_of(verified.request()) == kind;
+                if id_ok && kind_ok {
                     passed += 1;
+                } else {
+                    if !id_ok {
+                        failures.push(format!("{label}: request_id mismatch after decode"));
+                    }
+                    if !kind_ok {
+                        failures.push(format!(
+                            "{label}: request kind mismatch (expected {:?}, got {:?})",
+                            kind,
+                            request_kind_of(verified.request())
+                        ));
+                    }
                 }
             }
             Err(err) => failures.push(format!("{label}: decode failed: {:?}", err)),
