@@ -3,7 +3,7 @@ Rejected exact head: 161fa554b07f7ec74a359a3c87e9dea5cb69c35f
 Parent RED commit corrected: b875b9cc082cc5fdf87178f09d950a4ad5b1ccb2
 Base/merge-base: 01a4bf8c8de2a5cb4544bf74af9bb819c29adf1c
 Native review: ID 5033388088, agentos-reviewer (302623761), CHANGES_REQUESTED
-Captured: 2026-08-26 (bare/unpiped; production unchanged at 161fa554)
+Captured: 2026-08-26 (bare/unpiped; production unchanged at 161fa554; warning-free clippy on repair suite)
 
 Command: cargo test -p agentbed-watchdogd --test l03_request_payload_binding_repair
 Exit: 101

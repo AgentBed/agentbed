@@ -290,8 +290,7 @@ fn all_five_request_kinds_reject_payload_binding_mismatch_without_consuming_coun
                     "{label}: hostile payload accepted-invalid (decode succeeded)"
                 )),
                 Err(err) if !is_payload_binding_rejection(&err) => failures.push(format!(
-                    "{label}: hostile decode wrong error {:?}",
-                    err
+                    "{label}: hostile decode wrong error {err:?}"
                 )),
                 Err(_) => {}
             }
@@ -306,8 +305,7 @@ fn all_five_request_kinds_reject_payload_binding_mismatch_without_consuming_coun
                     }
                 }
                 Err(err) => failures.push(format!(
-                    "{label}: valid counterpart failed at counter 1 ({:?}) — counter likely consumed by hostile payload",
-                    err
+                    "{label}: valid counterpart failed at counter 1 ({err:?}) — counter likely consumed by hostile payload"
                 )),
             }
 
@@ -362,33 +360,31 @@ fn cross_transaction_arm_cannot_persist_payload_tx_or_mutate_authority() {
     );
     let frame = encode_request(&hostile, &established, 1).expect("encode cross-tx arm");
 
-    let mut decode_outcome = String::from("decode_not_attempted");
-    let mut handle_outcome = String::from("handle_not_attempted");
+    let decode_outcome: String;
+    let handle_outcome: String;
     let mut decode_typed_refusal = false;
     let mut handle_typed_refusal = false;
 
     match decode_request(&frame, &mut session) {
         Ok(verified) => {
             decode_outcome = "decode_accepted_invalid".to_owned();
-            match core.handle_request(verified, &mut session) {
-                Ok(resp) => {
-                    handle_outcome = format!("handle_accepted_invalid: {:?}", resp);
-                }
+            handle_outcome = match core.handle_request(verified, &mut session) {
+                Ok(resp) => format!("handle_accepted_invalid: {resp:?}"),
                 Err(err) if is_payload_binding_rejection(&err) => {
                     handle_typed_refusal = true;
-                    handle_outcome = format!("handle_refused: {:?}", err);
+                    format!("handle_refused: {err:?}")
                 }
-                Err(err) => {
-                    handle_outcome = format!("handle_wrong_error: {:?}", err);
-                }
-            }
+                Err(err) => format!("handle_wrong_error: {err:?}"),
+            };
         }
         Err(err) if is_payload_binding_rejection(&err) => {
             decode_typed_refusal = true;
-            decode_outcome = format!("decode_refused: {:?}", err);
+            decode_outcome = format!("decode_refused: {err:?}");
+            handle_outcome = "handle_not_attempted".to_owned();
         }
         Err(err) => {
-            decode_outcome = format!("decode_wrong_error: {:?}", err);
+            decode_outcome = format!("decode_wrong_error: {err:?}");
+            handle_outcome = "handle_not_attempted".to_owned();
         }
     }
 
@@ -498,7 +494,7 @@ fn exact_payload_binding_preserves_all_five_authenticated_round_trips() {
                     }
                 }
             }
-            Err(err) => failures.push(format!("{label}: decode failed: {:?}", err)),
+            Err(err) => failures.push(format!("{label}: decode failed: {err:?}")),
         }
 
         let obs = observe_authority(&store);
