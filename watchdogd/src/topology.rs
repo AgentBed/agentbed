@@ -1,5 +1,6 @@
 //! Production startup topology verifier for the sealed H-04 watchdog store.
 
+use crate::core::WATCHDOG_MOUNT_ROOT;
 use crate::error::TopologyError;
 use crate::interfaces::TopologyProbe;
 use std::fs::{self, OpenOptions};
@@ -15,12 +16,10 @@ pub struct ProductionTopologyProbe;
 const PROTECTED_DOMAIN_PATHS: &[&str] = &[
     "/",
     "/nix",
+    "/nix/store",
     "/var/lib/agentbed/broker/state",
     "/var/lib/agentbed/rollback",
 ];
-
-/// Candidate-closure domain under `/nix/store` (watchdog files must never alias into it).
-const NIX_STORE_DOMAIN: &str = "/nix/store";
 
 const STORE_DIR_MODE: u32 = 0o700;
 const AUTHORITATIVE_FILE_MODE: u32 = 0o600;
@@ -59,20 +58,25 @@ impl TopologyProbe for ProductionTopologyProbe {
         let store_abs = absolute_lexical_path(store_root)?;
         let mountinfo = read_mount_table()?;
 
-        let store_mount = find_exact_mount(&mountinfo, &store_abs).ok_or_else(|| {
-            let meta = fs::symlink_metadata(store_root);
-            match meta {
-                Ok(m) if m.is_dir() => TopologyError::OrdinaryDirectoryFallback,
-                Ok(_) => TopologyError::NonRegularComponent,
-                Err(_) => TopologyError::UnavailableStore,
+        let store_mount = match find_exact_mount_unique(&mountinfo, &store_abs) {
+            Ok(entry) => entry,
+            Err(TopologyError::UnavailableStore) => return Err(TopologyError::UnavailableStore),
+            Err(_) => {
+                let meta = fs::symlink_metadata(store_root);
+                return Err(match meta {
+                    Ok(m) if m.is_dir() => TopologyError::OrdinaryDirectoryFallback,
+                    Ok(_) => TopologyError::NonRegularComponent,
+                    Err(_) => TopologyError::UnavailableStore,
+                });
             }
-        })?;
+        };
+
+        if !path_matches_sealed_mount_root(&store_abs) {
+            return Err(TopologyError::MissingMount);
+        }
 
         let store_meta =
             fs::symlink_metadata(store_root).map_err(|_| TopologyError::UnavailableStore)?;
-        if !store_meta.is_dir() {
-            return Err(TopologyError::NonRegularComponent);
-        }
 
         #[cfg(unix)]
         {
@@ -80,23 +84,18 @@ impl TopologyProbe for ProductionTopologyProbe {
             let store_mount_id = store_mount.mount_id;
             let store_dev = store_meta.dev();
 
+            evaluate_root_dir_metadata(&store_meta, STORE_DIR_MODE)?;
+
             for domain in PROTECTED_DOMAIN_PATHS {
                 let (domain_mount_id, domain_dev) = protected_domain_identity(&mountinfo, domain)?;
-                if store_mount_id == domain_mount_id || store_dev == domain_dev {
-                    return Err(TopologyError::SameDeviceAlias);
-                }
+                evaluate_mount_device_separation(
+                    store_mount_id,
+                    store_dev,
+                    domain_mount_id,
+                    domain_dev,
+                )?;
             }
 
-            // Reject alias into the `/nix/store` candidate-closure domain.
-            if let Ok((nix_store_mount_id, nix_store_dev)) =
-                protected_domain_identity(&mountinfo, NIX_STORE_DOMAIN)
-            {
-                if store_mount_id == nix_store_mount_id || store_dev == nix_store_dev {
-                    return Err(TopologyError::SameDeviceAlias);
-                }
-            }
-
-            check_root_owned_dir_mode(store_root, STORE_DIR_MODE)?;
             inspect_existing_layout(store_root)?;
             prove_writable_same_directory_atomic(store_root)?;
         }
@@ -114,9 +113,30 @@ impl TopologyProbe for ProductionTopologyProbe {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MountEntry {
     mount_id: u32,
-    major: u32,
-    minor: u32,
     mount_point: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirEvidence {
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    is_symlink: bool,
+    is_dir: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileEvidence {
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    link_count: u64,
+    is_symlink: bool,
+    is_file: bool,
+}
+
+fn path_matches_sealed_mount_root(path: &Path) -> bool {
+    normalize_mount_path(path) == Path::new(WATCHDOG_MOUNT_ROOT)
 }
 
 fn reject_lexical_traversal(path: &Path) -> Result<(), TopologyError> {
@@ -189,7 +209,7 @@ fn normalize_mount_path(path: &Path) -> PathBuf {
 fn read_mount_table() -> Result<Vec<MountEntry>, TopologyError> {
     let raw =
         fs::read_to_string("/proc/self/mountinfo").map_err(|_| TopologyError::UnavailableStore)?;
-    parse_mountinfo(&raw).map_err(|_| TopologyError::UnavailableStore)
+    parse_mountinfo(&raw)
 }
 
 fn parse_mountinfo(raw: &str) -> Result<Vec<MountEntry>, TopologyError> {
@@ -214,69 +234,85 @@ fn parse_mountinfo_line(line: &str) -> Result<MountEntry, TopologyError> {
         .parse()
         .map_err(|_| TopologyError::UnavailableStore)?;
     fields.next().ok_or(TopologyError::UnavailableStore)?;
-    let major_minor = fields.next().ok_or(TopologyError::UnavailableStore)?;
-    let (major, minor) = parse_major_minor(major_minor)?;
+    fields.next().ok_or(TopologyError::UnavailableStore)?;
     fields.next().ok_or(TopologyError::UnavailableStore)?;
     let mount_point_raw = fields.next().ok_or(TopologyError::UnavailableStore)?;
-    let mount_point = unescape_mount_path(mount_point_raw);
+    let mount_point = unescape_mount_path(mount_point_raw)?;
     Ok(MountEntry {
         mount_id,
-        major,
-        minor,
         mount_point,
     })
 }
 
-fn parse_major_minor(token: &str) -> Result<(u32, u32), TopologyError> {
-    let (major, minor) = token
-        .split_once(':')
-        .ok_or(TopologyError::UnavailableStore)?;
-    let major = major.parse().map_err(|_| TopologyError::UnavailableStore)?;
-    let minor = minor.parse().map_err(|_| TopologyError::UnavailableStore)?;
-    Ok((major, minor))
-}
-
-fn unescape_mount_path(raw: &str) -> String {
+fn unescape_mount_path(raw: &str) -> Result<String, TopologyError> {
     let mut out = String::with_capacity(raw.len());
     let bytes = raw.as_bytes();
     let mut idx = 0;
     while let Some(&byte) = bytes.get(idx) {
         if byte == b'\\' {
-            if let (Some(&h), Some(&t), Some(&o)) =
-                (bytes.get(idx + 1), bytes.get(idx + 2), bytes.get(idx + 3))
-            {
-                if let (Some(h), Some(t), Some(o)) = (hex_digit(h), hex_digit(t), hex_digit(o)) {
-                    let value = (h << 6) | (t << 3) | o;
-                    out.push(char::from(value));
-                    idx += 4;
-                    continue;
-                }
-            }
+            let h = bytes.get(idx + 1).ok_or(TopologyError::UnavailableStore)?;
+            let t = bytes.get(idx + 2).ok_or(TopologyError::UnavailableStore)?;
+            let o = bytes.get(idx + 3).ok_or(TopologyError::UnavailableStore)?;
+            let value = (hex_digit(*h)? << 6) | (hex_digit(*t)? << 3) | hex_digit(*o)?;
+            out.push(char::from(value));
+            idx += 4;
+            continue;
         }
         out.push(char::from(byte));
         idx += 1;
     }
-    out
+    Ok(out)
 }
 
-fn hex_digit(byte: u8) -> Option<u8> {
+fn hex_digit(byte: u8) -> Result<u8, TopologyError> {
     match byte {
-        b'0'..=b'7' => Some(byte - b'0'),
-        _ => None,
+        b'0'..=b'7' => Ok(byte - b'0'),
+        _ => Err(TopologyError::UnavailableStore),
     }
 }
 
-fn find_exact_mount<'a>(entries: &'a [MountEntry], path: &Path) -> Option<&'a MountEntry> {
+fn find_exact_mount_unique<'a>(
+    entries: &'a [MountEntry],
+    path: &Path,
+) -> Result<&'a MountEntry, TopologyError> {
     let normalized = normalize_mount_path(path);
     let normalized = normalized.to_string_lossy();
-    entries.iter().find(|entry| entry.mount_point == normalized)
+    let mut matches = entries
+        .iter()
+        .filter(|entry| entry.mount_point == normalized);
+    let first = matches
+        .next()
+        .ok_or(TopologyError::OrdinaryDirectoryFallback)?;
+    if matches.next().is_some() {
+        return Err(TopologyError::UnavailableStore);
+    }
+    Ok(first)
 }
 
-fn containing_mount<'a>(entries: &'a [MountEntry], path: &str) -> Option<&'a MountEntry> {
-    entries
+fn containing_mount_unique<'a>(
+    entries: &'a [MountEntry],
+    path: &str,
+) -> Result<&'a MountEntry, TopologyError> {
+    let candidates: Vec<&MountEntry> = entries
         .iter()
         .filter(|entry| mount_point_contains(&entry.mount_point, path))
-        .max_by_key(|entry| entry.mount_point.len())
+        .collect();
+    if candidates.is_empty() {
+        return Err(TopologyError::UnavailableStore);
+    }
+    let max_len = candidates
+        .iter()
+        .map(|entry| entry.mount_point.len())
+        .max()
+        .unwrap_or(0);
+    let longest: Vec<&&MountEntry> = candidates
+        .iter()
+        .filter(|entry| entry.mount_point.len() == max_len)
+        .collect();
+    match longest.as_slice() {
+        [only] => Ok(*only),
+        _ => Err(TopologyError::UnavailableStore),
+    }
 }
 
 fn mount_point_contains(mount_point: &str, path: &str) -> bool {
@@ -290,50 +326,111 @@ fn protected_domain_identity(
     entries: &[MountEntry],
     domain_path: &str,
 ) -> Result<(u32, u64), TopologyError> {
-    let containing =
-        containing_mount(entries, domain_path).ok_or(TopologyError::UnavailableStore)?;
-    let mount_id = containing.mount_id;
-    let domain_dev = if Path::new(domain_path).exists() {
-        let meta =
-            fs::symlink_metadata(domain_path).map_err(|_| TopologyError::UnavailableStore)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            meta.dev()
-        }
-        #[cfg(not(unix))]
-        {
-            return Err(TopologyError::UnavailableStore);
-        }
-    } else {
-        dev_from_major_minor(containing.major, containing.minor)
-    };
-    Ok((mount_id, domain_dev))
+    let domain = Path::new(domain_path);
+    reject_lexical_traversal(domain)?;
+    reject_symlink_components(domain)?;
+
+    if !domain.exists() {
+        return Err(TopologyError::MissingMount);
+    }
+
+    let containing = containing_mount_unique(entries, domain_path)?;
+    let meta = fs::symlink_metadata(domain).map_err(|_| TopologyError::UnavailableStore)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok((containing.mount_id, meta.dev()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (containing, meta);
+        Err(TopologyError::UnavailableStore)
+    }
 }
 
 #[cfg(unix)]
-fn dev_from_major_minor(major: u32, minor: u32) -> u64 {
-    let major = u64::from(major);
-    let minor = u64::from(minor);
-    ((major & 0xfff) << 8) | (minor & 0xff) | ((major & !0xfff) << 32)
+fn evaluate_mount_device_separation(
+    store_mount_id: u32,
+    store_dev: u64,
+    domain_mount_id: u32,
+    domain_dev: u64,
+) -> Result<(), TopologyError> {
+    if store_mount_id == domain_mount_id || store_dev == domain_dev {
+        return Err(TopologyError::SameDeviceAlias);
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
-fn check_root_owned_dir_mode(path: &Path, expected_mode: u32) -> Result<(), TopologyError> {
+fn evaluate_root_dir_metadata(
+    meta: &fs::Metadata,
+    expected_mode: u32,
+) -> Result<(), TopologyError> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let meta = fs::symlink_metadata(path).map_err(|_| TopologyError::UnavailableStore)?;
-    if meta.is_symlink() {
+    let evidence = DirEvidence {
+        uid: meta.uid(),
+        gid: meta.gid(),
+        mode: meta.permissions().mode() & 0o777,
+        is_symlink: meta.file_type().is_symlink(),
+        is_dir: meta.is_dir(),
+    };
+    evaluate_dir_ownership(evidence, expected_mode)
+}
+
+#[cfg(unix)]
+fn evaluate_dir_ownership(evidence: DirEvidence, expected_mode: u32) -> Result<(), TopologyError> {
+    if evidence.is_symlink {
         return Err(TopologyError::SymlinkComponent);
     }
-    if !meta.is_dir() {
+    if !evidence.is_dir {
         return Err(TopologyError::NonRegularComponent);
     }
-    if meta.uid() != 0 || meta.gid() != 0 {
+    if evidence.uid != 0 || evidence.gid != 0 {
         return Err(TopologyError::WrongOwnershipOrMode);
     }
-    let mode = meta.permissions().mode() & 0o777;
-    if mode != expected_mode {
+    if evidence.mode != expected_mode {
         return Err(TopologyError::WrongOwnershipOrMode);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn evaluate_regular_file_metadata(
+    meta: &fs::Metadata,
+    expected_mode: u32,
+) -> Result<(), TopologyError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let evidence = FileEvidence {
+        uid: meta.uid(),
+        gid: meta.gid(),
+        mode: meta.permissions().mode() & 0o777,
+        link_count: meta.nlink(),
+        is_symlink: meta.file_type().is_symlink(),
+        is_file: meta.is_file(),
+    };
+    evaluate_file_ownership(evidence, expected_mode)
+}
+
+#[cfg(unix)]
+fn evaluate_file_ownership(
+    evidence: FileEvidence,
+    expected_mode: u32,
+) -> Result<(), TopologyError> {
+    if evidence.is_symlink {
+        return Err(TopologyError::SymlinkComponent);
+    }
+    if !evidence.is_file {
+        return Err(TopologyError::NonRegularComponent);
+    }
+    if evidence.uid != 0 || evidence.gid != 0 {
+        return Err(TopologyError::WrongOwnershipOrMode);
+    }
+    if evidence.mode != expected_mode {
+        return Err(TopologyError::WrongOwnershipOrMode);
+    }
+    if evidence.link_count != 1 {
+        return Err(TopologyError::WrongLinkCount);
     }
     Ok(())
 }
@@ -343,44 +440,23 @@ fn inspect_existing_layout(store_root: &Path) -> Result<(), TopologyError> {
     for subdir in WATCHDOG_SUBDIRS {
         let path = store_root.join(subdir);
         if path.exists() {
-            check_root_owned_dir_mode(&path, STORE_DIR_MODE)?;
+            let meta = fs::symlink_metadata(&path).map_err(|_| TopologyError::UnavailableStore)?;
+            evaluate_root_dir_metadata(&meta, STORE_DIR_MODE)?;
         }
     }
     for (rel, mode) in WATCHDOG_AUTHORITATIVE_FILES {
         let path = store_root.join(rel);
         if path.exists() {
-            check_root_owned_regular_file(&path, *mode)?;
+            let meta = fs::symlink_metadata(&path).map_err(|_| TopologyError::UnavailableStore)?;
+            evaluate_regular_file_metadata(&meta, *mode)?;
         }
     }
     for (rel, mode) in WATCHDOG_OPTIONAL_FILES {
         let path = store_root.join(rel);
         if path.exists() {
-            check_root_owned_regular_file(&path, *mode)?;
+            let meta = fs::symlink_metadata(&path).map_err(|_| TopologyError::UnavailableStore)?;
+            evaluate_regular_file_metadata(&meta, *mode)?;
         }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn check_root_owned_regular_file(path: &Path, expected_mode: u32) -> Result<(), TopologyError> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let meta = fs::symlink_metadata(path).map_err(|_| TopologyError::UnavailableStore)?;
-    if meta.is_symlink() {
-        return Err(TopologyError::SymlinkComponent);
-    }
-    if !meta.is_file() {
-        return Err(TopologyError::NonRegularComponent);
-    }
-    if meta.uid() != 0 || meta.gid() != 0 {
-        return Err(TopologyError::WrongOwnershipOrMode);
-    }
-    let mode = meta.permissions().mode() & 0o777;
-    if mode != expected_mode {
-        return Err(TopologyError::WrongOwnershipOrMode);
-    }
-    let link_count = meta.nlink();
-    if link_count != 1 {
-        return Err(TopologyError::WrongLinkCount);
     }
     Ok(())
 }
@@ -395,7 +471,7 @@ fn prove_writable_same_directory_atomic(store_root: &Path) -> Result<(), Topolog
     let tmp = store_root.join(format!(".tmp-topology-probe-{nanos}"));
     let renamed = store_root.join(format!(".tmp-topology-probe-renamed-{nanos}"));
     let payload = b"agentbed-topology-probe";
-    let _cleanup = ProbeResidueGuard::new(store_root, vec![tmp.clone(), renamed.clone()]);
+    let mut cleanup = ProbeResidueGuard::new(store_root, vec![tmp.clone(), renamed.clone()]);
 
     let mut file = OpenOptions::new()
         .write(true)
@@ -415,7 +491,18 @@ fn prove_writable_same_directory_atomic(store_root: &Path) -> Result<(), Topolog
     if readback != payload {
         return Err(TopologyError::Unwritable);
     }
+
+    cleanup_probe_residue(store_root, &[renamed])?;
+    cleanup.disarm();
     Ok(())
+}
+
+#[cfg(unix)]
+fn cleanup_probe_residue(parent: &Path, paths: &[PathBuf]) -> Result<(), TopologyError> {
+    for path in paths {
+        let _ = fs::remove_file(path);
+    }
+    dir_fsync(parent)
 }
 
 #[cfg(unix)]
@@ -431,6 +518,7 @@ fn dir_fsync(path: &Path) -> Result<(), TopologyError> {
 struct ProbeResidueGuard {
     parent: PathBuf,
     paths: Vec<PathBuf>,
+    disabled: bool,
 }
 
 #[cfg(unix)]
@@ -439,17 +527,22 @@ impl ProbeResidueGuard {
         Self {
             parent: parent.to_path_buf(),
             paths,
+            disabled: false,
         }
+    }
+
+    fn disarm(&mut self) {
+        self.disabled = true;
     }
 }
 
 #[cfg(unix)]
 impl Drop for ProbeResidueGuard {
     fn drop(&mut self) {
-        for path in &self.paths {
-            let _ = fs::remove_file(path);
+        if self.disabled {
+            return;
         }
-        let _ = dir_fsync(&self.parent);
+        let _ = cleanup_probe_residue(&self.parent, &self.paths);
     }
 }
 
@@ -458,10 +551,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mountinfo_unescapes_octal_space_in_mount_point() {
-        let line = "36 35 98:0 / /mnt/with\\040space rw,relatime - ext4 /dev/sda1 rw";
-        let entry = parse_mountinfo_line(line).expect("parse");
-        assert_eq!(entry.mount_point, "/mnt/with space");
+    fn mountinfo_unescapes_valid_octal_sequences() {
+        assert_eq!(
+            unescape_mount_path("/mnt/with\\040space").expect("space"),
+            "/mnt/with space"
+        );
+        assert_eq!(
+            unescape_mount_path("/tab\\011here").expect("tab"),
+            "/tab\there"
+        );
+        assert_eq!(
+            unescape_mount_path("/line\\012feed").expect("lf"),
+            "/line\nfeed"
+        );
+        assert_eq!(
+            unescape_mount_path("/slash\\134end").expect("backslash"),
+            "/slash\\end"
+        );
+    }
+
+    #[test]
+    fn mountinfo_rejects_incomplete_escape() {
+        let err = unescape_mount_path("/bad\\04").expect_err("incomplete");
+        assert_eq!(err, TopologyError::UnavailableStore);
+    }
+
+    #[test]
+    fn mountinfo_rejects_non_octal_escape() {
+        let err = unescape_mount_path("/bad\\980").expect_err("non-octal");
+        assert_eq!(err, TopologyError::UnavailableStore);
     }
 
     #[test]
@@ -471,82 +589,214 @@ mod tests {
     }
 
     #[test]
-    fn containing_mount_uses_longest_component_boundary_prefix() {
+    fn containing_mount_unique_uses_longest_component_boundary_prefix() {
         let entries = vec![
             MountEntry {
                 mount_id: 1,
-                major: 8,
-                minor: 1,
                 mount_point: "/".to_string(),
             },
             MountEntry {
                 mount_id: 2,
-                major: 8,
-                minor: 2,
                 mount_point: "/var".to_string(),
             },
             MountEntry {
                 mount_id: 3,
-                major: 8,
-                minor: 3,
                 mount_point: "/var/lib/agentbed/broker/state".to_string(),
             },
         ];
-        let found = containing_mount(&entries, "/var/lib/agentbed/broker/state/wal")
-            .expect("containing mount");
+        let found =
+            containing_mount_unique(&entries, "/var/lib/agentbed/broker/state/wal").expect("mount");
         assert_eq!(found.mount_id, 3);
     }
 
     #[test]
-    fn exact_mount_requires_mount_point_not_ordinary_directory() {
-        let entries = vec![MountEntry {
-            mount_id: 10,
-            major: 8,
-            minor: 10,
-            mount_point: "/var/lib/agentbed/watchdog".to_string(),
-        }];
-        assert!(find_exact_mount(&entries, Path::new("/var/lib/agentbed/watchdog")).is_some());
-        assert!(find_exact_mount(&entries, Path::new("/var/lib/agentbed/watchdog/sub")).is_none());
+    fn containing_mount_unique_rejects_ambiguous_equal_longest_prefix() {
+        let entries = vec![
+            MountEntry {
+                mount_id: 1,
+                mount_point: "/var/lib".to_string(),
+            },
+            MountEntry {
+                mount_id: 2,
+                mount_point: "/var/lib".to_string(),
+            },
+        ];
+        let err = containing_mount_unique(&entries, "/var/lib/agentbed").expect_err("ambiguous");
+        assert_eq!(err, TopologyError::UnavailableStore);
     }
 
     #[test]
-    fn mount_id_alias_detected_for_same_containing_mount() {
+    fn exact_mount_unique_rejects_duplicate_entries() {
         let entries = vec![
             MountEntry {
-                mount_id: 42,
-                major: 8,
-                minor: 1,
-                mount_point: "/".to_string(),
+                mount_id: 10,
+                mount_point: "/var/lib/agentbed/watchdog".to_string(),
             },
             MountEntry {
-                mount_id: 42,
-                major: 8,
-                minor: 1,
+                mount_id: 11,
                 mount_point: "/var/lib/agentbed/watchdog".to_string(),
             },
         ];
-        let store = find_exact_mount(&entries, Path::new("/var/lib/agentbed/watchdog")).unwrap();
-        let root = containing_mount(&entries, "/").unwrap();
-        assert_eq!(store.mount_id, root.mount_id);
+        let err = find_exact_mount_unique(&entries, Path::new("/var/lib/agentbed/watchdog"))
+            .expect_err("duplicate");
+        assert_eq!(err, TopologyError::UnavailableStore);
     }
 
     #[test]
-    fn device_alias_detected_from_major_minor() {
-        let dev = dev_from_major_minor(8, 1);
-        assert_ne!(dev, 0);
-        assert_eq!(dev, dev_from_major_minor(8, 1));
-        assert_ne!(dev, dev_from_major_minor(8, 2));
+    fn sealed_mount_root_requires_exact_watchdog_path() {
+        assert!(path_matches_sealed_mount_root(Path::new(
+            WATCHDOG_MOUNT_ROOT
+        )));
+        assert!(!path_matches_sealed_mount_root(Path::new(
+            "/mnt/other-watchdog"
+        )));
+    }
+
+    #[test]
+    fn evaluate_mount_device_separation_rejects_same_mount_id() {
+        let err = evaluate_mount_device_separation(42, 100, 42, 200).expect_err("mount id");
+        assert_eq!(err, TopologyError::SameDeviceAlias);
+    }
+
+    #[test]
+    fn evaluate_mount_device_separation_rejects_same_st_dev() {
+        let err = evaluate_mount_device_separation(1, 77, 2, 77).expect_err("st_dev");
+        assert_eq!(err, TopologyError::SameDeviceAlias);
+    }
+
+    #[test]
+    fn evaluate_dir_ownership_rejects_bad_root_uid_gid_mode() {
+        let err = evaluate_dir_ownership(
+            DirEvidence {
+                uid: 1000,
+                gid: 0,
+                mode: STORE_DIR_MODE,
+                is_symlink: false,
+                is_dir: true,
+            },
+            STORE_DIR_MODE,
+        )
+        .expect_err("uid");
+        assert_eq!(err, TopologyError::WrongOwnershipOrMode);
+
+        let err = evaluate_dir_ownership(
+            DirEvidence {
+                uid: 0,
+                gid: 1000,
+                mode: STORE_DIR_MODE,
+                is_symlink: false,
+                is_dir: true,
+            },
+            STORE_DIR_MODE,
+        )
+        .expect_err("gid");
+        assert_eq!(err, TopologyError::WrongOwnershipOrMode);
+
+        let err = evaluate_dir_ownership(
+            DirEvidence {
+                uid: 0,
+                gid: 0,
+                mode: 0o755,
+                is_symlink: false,
+                is_dir: true,
+            },
+            STORE_DIR_MODE,
+        )
+        .expect_err("mode");
+        assert_eq!(err, TopologyError::WrongOwnershipOrMode);
+    }
+
+    #[test]
+    fn evaluate_dir_ownership_rejects_symlink_and_non_directory() {
+        let err = evaluate_dir_ownership(
+            DirEvidence {
+                uid: 0,
+                gid: 0,
+                mode: STORE_DIR_MODE,
+                is_symlink: true,
+                is_dir: false,
+            },
+            STORE_DIR_MODE,
+        )
+        .expect_err("symlink");
+        assert_eq!(err, TopologyError::SymlinkComponent);
+
+        let err = evaluate_dir_ownership(
+            DirEvidence {
+                uid: 0,
+                gid: 0,
+                mode: STORE_DIR_MODE,
+                is_symlink: false,
+                is_dir: false,
+            },
+            STORE_DIR_MODE,
+        )
+        .expect_err("non-dir");
+        assert_eq!(err, TopologyError::NonRegularComponent);
+    }
+
+    #[test]
+    fn evaluate_file_ownership_rejects_bad_uid_gid_mode_and_link_count() {
+        let err = evaluate_file_ownership(
+            FileEvidence {
+                uid: 1,
+                gid: 0,
+                mode: AUTHORITATIVE_FILE_MODE,
+                link_count: 1,
+                is_symlink: false,
+                is_file: true,
+            },
+            AUTHORITATIVE_FILE_MODE,
+        )
+        .expect_err("uid");
+        assert_eq!(err, TopologyError::WrongOwnershipOrMode);
+
+        let err = evaluate_file_ownership(
+            FileEvidence {
+                uid: 0,
+                gid: 1,
+                mode: AUTHORITATIVE_FILE_MODE,
+                link_count: 1,
+                is_symlink: false,
+                is_file: true,
+            },
+            AUTHORITATIVE_FILE_MODE,
+        )
+        .expect_err("gid");
+        assert_eq!(err, TopologyError::WrongOwnershipOrMode);
+
+        let err = evaluate_file_ownership(
+            FileEvidence {
+                uid: 0,
+                gid: 0,
+                mode: 0o644,
+                link_count: 1,
+                is_symlink: false,
+                is_file: true,
+            },
+            AUTHORITATIVE_FILE_MODE,
+        )
+        .expect_err("mode");
+        assert_eq!(err, TopologyError::WrongOwnershipOrMode);
+
+        let err = evaluate_file_ownership(
+            FileEvidence {
+                uid: 0,
+                gid: 0,
+                mode: AUTHORITATIVE_FILE_MODE,
+                link_count: 2,
+                is_symlink: false,
+                is_file: true,
+            },
+            AUTHORITATIVE_FILE_MODE,
+        )
+        .expect_err("nlink");
+        assert_eq!(err, TopologyError::WrongLinkCount);
     }
 
     #[test]
     fn mount_point_contains_respects_component_boundary() {
         assert!(mount_point_contains("/var", "/var/lib"));
         assert!(!mount_point_contains("/var", "/var-lib"));
-    }
-
-    #[test]
-    fn parse_mountinfo_table_rejects_ambiguous_major_minor() {
-        let err = parse_major_minor("not-a-device").expect_err("bad dev");
-        assert_eq!(err, TopologyError::UnavailableStore);
     }
 }
