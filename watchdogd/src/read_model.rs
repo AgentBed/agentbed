@@ -42,6 +42,8 @@ pub(crate) struct AuthorityRecord {
     deadline_nanos: Option<u32>,
     lease_expires_at_secs: Option<u64>,
     lease_expires_at_nanos: Option<u32>,
+    renewed_at_secs: Option<u64>,
+    renewed_at_nanos: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,9 +87,45 @@ impl AuthorityRecord {
     fn time_field(secs: Option<u64>, nanos: Option<u32>, label: &str) -> Result<SystemTime, Error> {
         let secs = secs.ok_or_else(|| invalid_log(&format!("missing {label}_secs")))?;
         let nanos = nanos.ok_or_else(|| invalid_log(&format!("missing {label}_nanos")))?;
+        if nanos >= 1_000_000_000 {
+            return Err(invalid_log(&format!("invalid {label}_nanos")));
+        }
         UNIX_EPOCH
             .checked_add(Duration::new(secs, nanos))
             .ok_or_else(|| invalid_log(&format!("invalid {label}")))
+    }
+
+    fn has_renewed_at_fields(&self) -> bool {
+        self.renewed_at_secs.is_some() || self.renewed_at_nanos.is_some()
+    }
+
+    fn has_armed_time_fields(&self) -> bool {
+        self.armed_at_secs.is_some() || self.armed_at_nanos.is_some()
+    }
+
+    fn has_deadline_fields(&self) -> bool {
+        self.deadline_secs.is_some() || self.deadline_nanos.is_some()
+    }
+
+    fn has_lease_expiry_fields(&self) -> bool {
+        self.lease_expires_at_secs.is_some() || self.lease_expires_at_nanos.is_some()
+    }
+
+    fn reject_forbidden_fields(&self, forbidden: &[&str]) -> Result<(), Error> {
+        for label in forbidden {
+            let present = match *label {
+                "base" => self.base.is_some(),
+                "armed_at" => self.has_armed_time_fields(),
+                "deadline" => self.has_deadline_fields(),
+                "lease_expires_at" => self.has_lease_expiry_fields(),
+                "renewed_at" => self.has_renewed_at_fields(),
+                _ => false,
+            };
+            if present {
+                return Err(invalid_log(&format!("forbidden field {label}")));
+            }
+        }
+        Ok(())
     }
 
     fn validate_schema(&self) -> Result<(), Error> {
@@ -97,6 +135,7 @@ impl AuthorityRecord {
                 if self.base.as_deref().is_none_or(str::is_empty) {
                     return Err(invalid_log("missing base"));
                 }
+                self.reject_forbidden_fields(&["renewed_at"])?;
                 Self::time_field(self.armed_at_secs, self.armed_at_nanos, "armed_at")?;
                 Self::time_field(self.deadline_secs, self.deadline_nanos, "deadline")?;
                 Self::time_field(
@@ -107,6 +146,8 @@ impl AuthorityRecord {
             }
             AuthorityRecordKind::LeaseRenewed => {
                 let (_, _, _, _) = self.binding_fields()?;
+                self.reject_forbidden_fields(&["base", "armed_at", "deadline"])?;
+                Self::time_field(self.renewed_at_secs, self.renewed_at_nanos, "renewed_at")?;
                 Self::time_field(
                     self.lease_expires_at_secs,
                     self.lease_expires_at_nanos,
@@ -115,6 +156,13 @@ impl AuthorityRecord {
             }
             AuthorityRecordKind::BeginCommit | AuthorityRecordKind::BeginRevert => {
                 let (_, _, _, _) = self.binding_fields()?;
+                self.reject_forbidden_fields(&[
+                    "base",
+                    "armed_at",
+                    "deadline",
+                    "lease_expires_at",
+                    "renewed_at",
+                ])?;
             }
             AuthorityRecordKind::ProbationPassed
             | AuthorityRecordKind::Committed
@@ -123,6 +171,13 @@ impl AuthorityRecord {
                 if tx_id.is_empty() {
                     return Err(invalid_log("missing tx_id"));
                 }
+                self.reject_forbidden_fields(&[
+                    "base",
+                    "armed_at",
+                    "deadline",
+                    "lease_expires_at",
+                    "renewed_at",
+                ])?;
             }
         }
         Ok(())
@@ -271,19 +326,30 @@ impl DecisionLogReader {
                     if binding != state.binding {
                         return Err(invalid_log("lease renewal binding mismatch"));
                     }
+                    let renewed_at = AuthorityRecord::time_field(
+                        record.renewed_at_secs,
+                        record.renewed_at_nanos,
+                        "renewed_at",
+                    )?;
                     let lease_expires_at = AuthorityRecord::time_field(
                         record.lease_expires_at_secs,
                         record.lease_expires_at_nanos,
                         "lease_expires_at",
                     )?;
+                    if renewed_at < state.last_activity {
+                        return Err(invalid_log("renewal before last activity"));
+                    }
+                    if renewed_at >= state.lease_expires_at || renewed_at > state.deadline {
+                        return Err(invalid_log("renewal after prior expiry"));
+                    }
                     if lease_expires_at > state.deadline {
                         return Err(invalid_log("lease renewal past deadline"));
                     }
-                    if lease_expires_at <= state.last_activity {
+                    if lease_expires_at <= state.lease_expires_at {
                         return Err(invalid_log("lease renewal did not extend expiry"));
                     }
                     state.lease_expires_at = lease_expires_at;
-                    state.last_activity = lease_expires_at;
+                    state.last_activity = renewed_at;
                     state.log_seq = record.sequence;
                 }
                 AuthorityRecordKind::BeginCommit | AuthorityRecordKind::BeginRevert => {
@@ -350,11 +416,11 @@ pub(crate) fn armed_record(
     armed_at: SystemTime,
     deadline: SystemTime,
     lease_expires_at: SystemTime,
-) -> AuthorityRecord {
-    let (armed_at_secs, armed_at_nanos) = time_parts(armed_at);
-    let (deadline_secs, deadline_nanos) = time_parts(deadline);
-    let (lease_expires_at_secs, lease_expires_at_nanos) = time_parts(lease_expires_at);
-    AuthorityRecord {
+) -> Result<AuthorityRecord, Error> {
+    let (armed_at_secs, armed_at_nanos) = time_parts(armed_at)?;
+    let (deadline_secs, deadline_nanos) = time_parts(deadline)?;
+    let (lease_expires_at_secs, lease_expires_at_nanos) = time_parts(lease_expires_at)?;
+    Ok(AuthorityRecord {
         sequence,
         epoch,
         kind: AuthorityRecordKind::Armed,
@@ -369,9 +435,12 @@ pub(crate) fn armed_record(
         deadline_nanos: Some(deadline_nanos),
         lease_expires_at_secs: Some(lease_expires_at_secs),
         lease_expires_at_nanos: Some(lease_expires_at_nanos),
-    }
+        renewed_at_secs: None,
+        renewed_at_nanos: None,
+    })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lease_renewed_record(
     sequence: u64,
     epoch: u64,
@@ -379,10 +448,12 @@ pub(crate) fn lease_renewed_record(
     tx_id: &str,
     lease_id: &str,
     worker_group_tag: WorkerGroupTag,
+    renewed_at: SystemTime,
     lease_expires_at: SystemTime,
-) -> AuthorityRecord {
-    let (lease_expires_at_secs, lease_expires_at_nanos) = time_parts(lease_expires_at);
-    AuthorityRecord {
+) -> Result<AuthorityRecord, Error> {
+    let (renewed_at_secs, renewed_at_nanos) = time_parts(renewed_at)?;
+    let (lease_expires_at_secs, lease_expires_at_nanos) = time_parts(lease_expires_at)?;
+    Ok(AuthorityRecord {
         sequence,
         epoch,
         kind: AuthorityRecordKind::LeaseRenewed,
@@ -397,7 +468,9 @@ pub(crate) fn lease_renewed_record(
         deadline_nanos: None,
         lease_expires_at_secs: Some(lease_expires_at_secs),
         lease_expires_at_nanos: Some(lease_expires_at_nanos),
-    }
+        renewed_at_secs: Some(renewed_at_secs),
+        renewed_at_nanos: Some(renewed_at_nanos),
+    })
 }
 
 pub(crate) fn decision_record(
@@ -424,12 +497,16 @@ pub(crate) fn decision_record(
         deadline_nanos: None,
         lease_expires_at_secs: None,
         lease_expires_at_nanos: None,
+        renewed_at_secs: None,
+        renewed_at_nanos: None,
     }
 }
 
-pub(crate) fn time_parts(time: SystemTime) -> (u64, u32) {
-    let duration = time.duration_since(UNIX_EPOCH).unwrap_or_default();
-    (duration.as_secs(), duration.subsec_nanos())
+pub(crate) fn time_parts(time: SystemTime) -> Result<(u64, u32), Error> {
+    let duration = time
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| invalid_log("pre-unix time"))?;
+    Ok((duration.as_secs(), duration.subsec_nanos()))
 }
 
 #[cfg(unix)]

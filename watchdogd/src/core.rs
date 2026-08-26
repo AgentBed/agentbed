@@ -117,7 +117,8 @@ impl WatchdogCore {
                 return Err(WatchdogError::SafeModeActive);
             }
             Ok(floor) => {
-                if is_reopen {
+                let needs_epoch_crosscheck = is_reopen || log_records > 0;
+                if needs_epoch_crosscheck {
                     let file_epoch = read_epoch_file(&epoch_path)?;
                     if file_epoch < floor {
                         return Err(WatchdogError::SafeModeActive);
@@ -144,8 +145,9 @@ impl WatchdogCore {
             }
         }
 
+        let should_reconstruct = is_reopen || log_records > 0;
         let (durable_binding, armed, last_clock) =
-            Self::reopen_state(is_reopen, log_reader.as_ref())?;
+            Self::reopen_state(should_reconstruct, log_reader.as_ref())?;
         let log_seq = log_records as u64;
 
         Ok(Self {
@@ -367,7 +369,7 @@ impl WatchdogCore {
         };
         self.advance_epoch(epoch)?;
         let lease_expires_at = min_time(now + LEASE_DURATION, deadline);
-        let record = armed_record(
+        let Ok(record) = armed_record(
             self.next_sequence()?,
             epoch,
             host_id,
@@ -378,7 +380,10 @@ impl WatchdogCore {
             now,
             deadline,
             lease_expires_at,
-        );
+        ) else {
+            self.enter_safe_mode()?;
+            return Err(RpcError::SafeModeActive);
+        };
         self.append_record(record)?;
         self.armed = Some(ArmedState {
             host_id: host_id.to_owned(),
@@ -453,15 +458,19 @@ impl WatchdogCore {
             self.last_clock = now;
             return Ok(());
         }
-        let record = lease_renewed_record(
+        let Ok(record) = lease_renewed_record(
             self.next_sequence()?,
             epoch,
             &host_id,
             tx_id,
             lease_id,
             worker_group_tag,
+            now,
             new_expiry,
-        );
+        ) else {
+            self.enter_safe_mode()?;
+            return Err(RpcError::SafeModeActive);
+        };
         self.append_record(record)?;
         if let Some(armed) = self.armed.as_mut() {
             armed.lease_expires_at = new_expiry;
@@ -515,6 +524,9 @@ impl WatchdogCore {
             return Err(RpcError::SafeModeActive);
         }
         let now = self.deps.clock.now();
+        if now < self.last_clock {
+            return Err(RpcError::ClockRegression);
+        }
         let observed = self.deps.base_revision.observed_base_revision();
         if !observed.is_empty() && observed != armed_base {
             return Err(RpcError::MovedBase);
