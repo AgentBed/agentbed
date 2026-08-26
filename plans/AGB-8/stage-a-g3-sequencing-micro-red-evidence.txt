@@ -1,0 +1,18 @@
+AGB-8 Stage A G3 sequencing micro-RED evidence
+Parent head: a04a4252015c190d36cb392157760cf7dcc6419e
+Accepted RED parent: fba4c7816b57d57be0bad76645c2faad05116181
+
+Standalone bare/unpiped filters:
+
+1. cargo test -p agentbed-watchdogd --test l03_scenario_round2 g3_epoch_advance_durability_order_is_fsync_rename_dir_fsync_readback
+   Exit 101 — observed [FileFsync, AtomicRename, Readback, DirFsync, ...]; readback precedes destination-parent dir-fsync
+
+2. cargo test -p agentbed-watchdogd --test l03_scenario_round2 g3_safe_mode_marker_durability_order_is_fsync_rename_dir_fsync_readback
+   Exit 101 — observed [FileFsync, AtomicRename, DirFsync]; marker readback absent
+
+Full target:
+
+cargo test -p agentbed-watchdogd --test l03_scenario_round2
+Exit 101 — 8/14 pass; 6 fail (4 G1 + 2 new sequencing micro-RED)
+
+Production unchanged at this micro-RED commit.

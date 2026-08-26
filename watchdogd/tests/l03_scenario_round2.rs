@@ -20,7 +20,7 @@ use agentbed_watchdogd::rpc::protocol::{encode_request, LocalRequest, LocalRespo
 use agentbed_watchdogd::topology::ProductionTopologyProbe;
 use agentbed_watchdogd::{CoreConfig, SessionState, WatchdogCore};
 use common::{
-    dependencies_from, scratch_dir, valid_worker_group_tag, FakeBundle, FakePeerCred,
+    dependencies_from, scratch_dir, valid_worker_group_tag, DurabilityOp, FakeBundle, FakePeerCred,
     BROKER_STATE_ROOT, DECISION_LOG_REL, EPOCH_HIGH_WATER_REL, SAFE_MODE_REL,
 };
 use std::fs;
@@ -550,6 +550,80 @@ fn g3_legacy_epoch_temp_refusal_preserved() {
         0,
         "epoch advance must not proceed past ambiguous legacy temp"
     );
+}
+
+const REPLACEMENT_DURABILITY_ORDER: &[DurabilityOp] = &[
+    DurabilityOp::FileFsync,
+    DurabilityOp::AtomicRename,
+    DurabilityOp::DirFsync,
+    DurabilityOp::Readback,
+];
+
+fn durability_ops_since(bundle: &FakeBundle, start: usize) -> Vec<DurabilityOp> {
+    bundle.durability.ops.lock().expect("lock")[start..].to_vec()
+}
+
+fn assert_replacement_durability_order(ops: &[DurabilityOp], label: &str) {
+    assert!(
+        ops.windows(REPLACEMENT_DURABILITY_ORDER.len())
+            .any(|window| window == REPLACEMENT_DURABILITY_ORDER),
+        "{label}: expected file-fsync(temp) → atomic rename → destination-parent dir-fsync → readback, observed {ops:?}"
+    );
+}
+
+#[test]
+fn g3_epoch_advance_durability_order_is_fsync_rename_dir_fsync_readback() {
+    let bundle = FakeBundle::new();
+    let dir = scratch_dir("g3-epoch-order");
+    let mut core = open_core_seeded(&dir, &bundle);
+    let (mut session, established) = bootstrap_session(&core, &bundle, "tx1", 1, "lease1", 100);
+    let ops_before = bundle.durability.ops.lock().expect("lock").len();
+    handle_authenticated(
+        &mut core,
+        &mut session,
+        &established,
+        1,
+        arm_request(
+            "req-arm-order",
+            "tx1",
+            1,
+            "base-a",
+            bundle.clock.now() + Duration::from_secs(60),
+        ),
+    )
+    .expect("epoch advance must succeed for sequencing observation");
+    let ops = durability_ops_since(&bundle, ops_before);
+    assert_replacement_durability_order(&ops, "epoch high-water replacement");
+}
+
+#[test]
+fn g3_safe_mode_marker_durability_order_is_fsync_rename_dir_fsync_readback() {
+    let bundle = FakeBundle::new();
+    let dir = scratch_dir("g3-safe-order");
+    let store = core_config(&dir).store_root.clone();
+    seed_epoch_zero(&store);
+    fs::create_dir_all(store.join("epoch")).expect("epoch dir");
+    fs::write(store.join("epoch/.tmp-epoch"), b"stale").expect("legacy stale temp");
+    let mut core = open_core_seeded(&dir, &bundle);
+    let (mut session, established) = bootstrap_session(&core, &bundle, "tx-sm", 2, "lease1", 100);
+    let ops_before = bundle.durability.ops.lock().expect("lock").len();
+    let err = handle_authenticated(
+        &mut core,
+        &mut session,
+        &established,
+        1,
+        arm_request(
+            "req-arm-safe-order",
+            "tx-sm",
+            2,
+            "base-b",
+            bundle.clock.now() + Duration::from_secs(60),
+        ),
+    )
+    .expect_err("legacy epoch temp must trigger safe-mode persistence before replacement");
+    assert!(matches!(err, RpcError::SafeModeActive));
+    let ops = durability_ops_since(&bundle, ops_before);
+    assert_replacement_durability_order(&ops, "safe-mode marker persistence");
 }
 
 // Reference sealed domains for source-contract readability (not executed).
