@@ -1,0 +1,36 @@
+AGB-8 L03 native review repair RED evidence
+Rejected PR head: dffcbb591cffbdfd000f80f6208e768e008db643
+Native review ID: 5032007100
+Native review author: agentos-reviewer (GitHub ID 302623761)
+Native review state: CHANGES_REQUESTED
+Captured: 2026-08-26 (bare/unpiped; production unchanged at dffcbb5)
+
+Command: cargo test -p agentbed-watchdogd --test l03_native_review_repair
+Exit: 101
+Causal failure: 6/6 native-review repair tests failed (0 passed)
+
+Failing tests and causal output:
+1. native_review_missing_high_water_after_open_fails_closed
+   - expected SafeModeActive after deleting epoch/high-water.json before Arm
+   - got Armed { request_id: "req-arm-missing-hw" }
+2. native_review_trailing_high_water_corruption_fails_closed
+   - expected SafeModeActive after 8-byte high-water plus trailing garbage
+   - got Armed { request_id: "req-arm-trail" }
+3. native_review_decision_is_single_shot
+   - expected ConflictingRequest on second RequestDecision
+   - got AuthorityChosen { request_id: "req-decide-2", kind: BeginRevert }
+4. native_review_restart_rejects_conflicting_rebind
+   - expected StaleReconnect for tx B rebind after reopen with armed tx A
+   - bind succeeded for tx-b/lease-b/tag-200
+5. native_review_timely_renewal_extends_lease_window
+   - expected BEGIN_COMMIT without fencing after timely renewal
+   - fence trace: [Term, BoundedWait, AliveAfterTerm, Kill, BoundedWait, ConfirmedExit, ZeroCandidateJobs]
+6. native_review_restart_preserves_chosen_authority_refuses_repeat
+   - expected ConflictingRequest on repeat RequestDecision after reopen
+   - got UnknownTransaction
+
+Findings covered: CRITICAL high-water fail-closed (L03-AC03), CRITICAL single-shot
+decision and restart binding reconstruction (L03-AC02/04/06/09), IMPORTANT lease
+renewal extension (L03-AC07).
+
+GREEN not claimed. Production repair unauthorized pending native-review RED acceptance.
