@@ -139,9 +139,8 @@ fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-fn lease_renewed_count(store: &Path) -> usize {
-    let reader = DecisionLogReader::open(store.join(DECISION_LOG_REL)).expect("reader");
-    usize::from(reader.contains_kind(AuthorityRecordKind::LeaseRenewed))
+fn decision_log_reader(store: &Path) -> DecisionLogReader {
+    DecisionLogReader::open(store.join(DECISION_LOG_REL)).expect("reader")
 }
 
 fn armed_record_count(store: &Path) -> usize {
@@ -234,7 +233,9 @@ fn green_audit_reopen_preserves_renewal_observation_time() {
         ),
     )
     .expect("first renewal");
-    assert_eq!(lease_renewed_count(&store), 1);
+    let reader = decision_log_reader(&store);
+    assert_eq!(reader.record_count(), 2);
+    assert_eq!(reader.last_kind(), Some(AuthorityRecordKind::LeaseRenewed));
     drop(core);
     let mut core =
         WatchdogCore::reopen(core_config(&dir), dependencies_from(&bundle)).expect("reopen");
@@ -257,11 +258,9 @@ fn green_audit_reopen_preserves_renewal_observation_time() {
         ),
     )
     .expect("second renewal after reopen");
-    assert_eq!(
-        lease_renewed_count(&store),
-        2,
-        "must append second durable LeaseRenewed"
-    );
+    let reader = decision_log_reader(&store);
+    assert_eq!(reader.record_count(), 3);
+    assert_eq!(reader.last_kind(), Some(AuthorityRecordKind::LeaseRenewed));
     assert!(
         bundle.fence_trace.snapshot().is_empty(),
         "renewal must not invoke fencing"
@@ -397,23 +396,24 @@ fn green_audit_reader_rejects_invalid_record_schema() {
             }),
         ),
     ];
+    let mut accepted_invalid = Vec::new();
+    let mut wrong_error_kind = Vec::new();
     for (name, value) in cases {
         if log_path.exists() {
             fs::remove_file(&log_path).expect("reset log");
         }
         let payload = serde_json::to_vec(&value).expect("json");
         write_framed_json_payload(&log_path, &payload);
-        let open_result = DecisionLogReader::open(&log_path);
-        assert!(
-            open_result.is_err(),
-            "{name}: reader must reject invalid schema, got {open_result:?}"
-        );
-        if let Err(err) = open_result {
-            assert_eq!(
-                err.kind(),
-                ErrorKind::InvalidData,
-                "{name}: expected InvalidData, got {err:?}"
-            );
+        match DecisionLogReader::open(&log_path) {
+            Ok(reader) => accepted_invalid.push(format!("{name}: accepted {reader:?}")),
+            Err(err) if err.kind() != ErrorKind::InvalidData => {
+                wrong_error_kind.push(format!("{name}: {err:?}"));
+            }
+            Err(_) => {}
         }
     }
+    assert!(
+        accepted_invalid.is_empty() && wrong_error_kind.is_empty(),
+        "reader must reject invalid schema; accepted-invalid: {accepted_invalid:?}; wrong error kinds: {wrong_error_kind:?}"
+    );
 }
