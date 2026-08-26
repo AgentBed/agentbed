@@ -67,7 +67,11 @@ fn open_core(dir: &Path, bundle: &FakeBundle) -> WatchdogCore {
 
 fn read_durable_high_water(store: &Path) -> u64 {
     let bytes = fs::read(store.join(EPOCH_HIGH_WATER_REL)).expect("high-water exists");
-    assert_eq!(bytes.len(), 8, "high-water must be exactly 8 big-endian bytes");
+    assert_eq!(
+        bytes.len(),
+        8,
+        "high-water must be exactly 8 big-endian bytes"
+    );
     let arr: [u8; 8] = bytes.try_into().expect("8 bytes");
     u64::from_be_bytes(arr)
 }
@@ -193,9 +197,7 @@ fn build_request(
             valid_worker_group_tag(WORKER_TAG),
             1,
         ),
-        RequestKind::RequestDecision => {
-            LocalRequest::request_decision(req_id, host, tx, epoch)
-        }
+        RequestKind::RequestDecision => LocalRequest::request_decision(req_id, host, tx, epoch),
     }
 }
 
@@ -253,11 +255,7 @@ fn all_five_request_kinds_reject_payload_binding_mismatch_without_consuming_coun
         RequestKind::Heartbeat,
         RequestKind::RequestDecision,
     ];
-    let fields = [
-        MismatchField::Host,
-        MismatchField::Tx,
-        MismatchField::Epoch,
-    ];
+    let fields = [MismatchField::Host, MismatchField::Tx, MismatchField::Epoch];
     let mut failures = Vec::new();
 
     for kind in kinds {
@@ -289,9 +287,9 @@ fn all_five_request_kinds_reject_payload_binding_mismatch_without_consuming_coun
                 Ok(_) => failures.push(format!(
                     "{label}: hostile payload accepted-invalid (decode succeeded)"
                 )),
-                Err(err) if !is_payload_binding_rejection(&err) => failures.push(format!(
-                    "{label}: hostile decode wrong error {err:?}"
-                )),
+                Err(err) if !is_payload_binding_rejection(&err) => {
+                    failures.push(format!("{label}: hostile decode wrong error {err:?}"));
+                }
                 Err(_) => {}
             }
 
@@ -499,7 +497,10 @@ fn exact_payload_binding_preserves_all_five_authenticated_round_trips() {
 
         let obs = observe_authority(&store);
         if obs.high_water != 0 {
-            failures.push(format!("{label}: high-water={}, expected 0", obs.high_water));
+            failures.push(format!(
+                "{label}: high-water={}, expected 0",
+                obs.high_water
+            ));
         }
         if obs.record_count > 0 {
             failures.push(format!("{label}: record_count={}", obs.record_count));
