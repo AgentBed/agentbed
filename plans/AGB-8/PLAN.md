@@ -15,7 +15,7 @@ This lane implements **watchdog-only durable authority** and the narrow authenti
 
 ### Consequential assumptions
 
-1. **Hermetic only.** Filesystem durability, topology proof, clock, local authentication, entropy, signals/process groups, job inspection, and invariant observations are injected behind narrow interfaces with fakes. Tests require no root, NixOS VM, systemd daemon, Proxmox, credentials, or live host mutation.
+1. **Hermetic only.** Filesystem durability, topology proof, clock, local authentication, entropy, process-group fencing (via injected interfaces only — no live signaling in L03), job inspection, and invariant observations are injected behind narrow interfaces with fakes. Tests require no root, NixOS VM, systemd daemon, Proxmox, credentials, or live host mutation. Real-signal tests on developer/login/shared-runner hosts are explicitly forbidden in L03.
 2. **H-04 sealed design.** The exact domains, paths, permissions, durability semantics, and startup refusal rules below are authoritative for L03. No improvisation of alternate mount roots, fallback directories, or cross-filesystem stores.
 3. **Single writer.** Only watchdog-owned code appends decision-log records (`ARMED`, `PROBATION_PASSED`, `BEGIN_COMMIT`, `BEGIN_REVERT`, `COMMITTED`, `REVERTED`). Broker crates hold request/response types and RPC client stubs only — no append API, no epoch allocation, no invariant evaluation, no terminal-state selection.
 4. **Process independence, not hostile-root boundary.** Permission/ownership checks and transaction self-protection are real; a malicious root can still alter watchdog files. OOB is the backstop (H-02/H-05, L05+). L03 must state this honestly (L03-AC10).
@@ -111,12 +111,12 @@ watchdogd/src/
   arming.rs             — invariant set validation, immutable capture (L03-AC05)
   authority.rs          — sole BEGIN_* selection from watchdog-owned evaluation (L03-AC06)
   lease.rs              — renewable lease + heartbeat/progress (L03-AC07)
-  fencing.rs            — SIGTERM→wait→SIGKILL→group exit→job inventory (L03-AC08)
+  fencing.rs            — injected `ProcessGroupFence` ordering contract; production unavailability (L03-AC08)
   invariants.rs         — mandatory invariant observation interface (injected; watchdog reads)
-  interfaces.rs         — Clock, Entropy, ProcessGroup, JobInspector, Topology, ExternalFloor
+  interfaces.rs         — Clock, Entropy, ProcessGroupFence, JobInspector, Topology, ExternalFloor, WorkerGroupTag
   lib.rs                — library surface for hermetic tests
   fakes/                — hermetic doubles for all injected interfaces (L03-AC10)
-  tests/                — crate integration + spawned-fixture fencing test (L03-AC08, AC09)
+  tests/                — crate integration + hermetic fencing-seam tests (L03-AC08, AC09)
 
 broker/src/
   watchdog/
@@ -135,7 +135,7 @@ Wire DTOs live exclusively in `watchdogd/src/rpc/protocol.rs`. The broker client
 - **Frame codec (normal server/client transport primitive):** every wire message uses `encode_frame` / `decode_frame` (or equivalent `FrameCodec`) — not a test helper. On the wire: `u32` big-endian payload length (maximum applies to payload length only), `u32` CRC32 of the payload, then UTF-8 JSON payload. The JSON envelope includes a protocol version field and is deserialized with strict deny-unknown semantics. Typed `encode_request` / `decode_request` and response equivalents build on this codec; RED may construct valid adverse frames by mutating encoded frame bytes (length/CRC/payload) without any test-only production API.
 - **Local process authentication** (not OOB signing, not a hostile-root boundary):
   1. Server derives peer identity from `SO_PEERCRED` and verifies it matches the exact configured broker peer `{uid, gid}` from `watchdog.json`. Wrong peer is refused before any handler.
-  2. **Session bootstrap (non-authority control exchange, mandatory before the five production request types):** after peer verification, the client sends a bounded strict `SessionBind` control envelope carrying **only** `{host_id, tx_id, epoch, lease_id, process_group, client_nonce}`. The watchdog validates that binding against durable/current state (new transaction or exact reconnect), mints an entropy-backed 256-bit capability bound to peer `{pid, uid, gid}` plus those fields, and returns `SessionEstablished {capability, server_nonce, counter=0}`. This control exchange cannot carry health/invariant/decision/terminal/path/signal inputs and **cannot append authority records**. It is **not** a sixth authority request, **not** `Disarm`, and **not** OOB.
+  2. **Session bootstrap (non-authority control exchange, mandatory before the five production request types):** after peer verification, the client sends a bounded strict `SessionBind` control envelope carrying **only** `{host_id, tx_id, epoch, lease_id, worker_group_tag, client_nonce}`. `worker_group_tag` is an opaque `WorkerGroupTag` newtype over `u32` — correlation/binding data only, never a signal target. `TryFrom<u32>` rejects `0`, `1`, and values above `i32::MAX`; negative JSON values fail decoding as `MalformedRequest`. The watchdog validates that binding against durable/current state (new transaction or exact reconnect), mints an entropy-backed 256-bit capability bound to peer `{pid, uid, gid}` plus those fields, and returns `SessionEstablished {capability, server_nonce, counter=0}`. This control exchange cannot carry health/invariant/decision/terminal/path/signal inputs and **cannot append authority records**. It is **not** a sixth authority request, **not** `Disarm`, and **not** OOB.
   3. **Post-bootstrap binding:** every one of the five production request envelopes and every response carries and validates the exact capability, request ID, host/tx/epoch binding, and strictly monotonic counter. Old capabilities die on reconnect or daemon restart. A reconnect may establish a new capability only when `SessionBind` exactly matches reconstructed durable state; unknown/stale/conflicting bindings fail closed with **no new authority record**.
   4. Capability is connection/daemon-lifetime only: never persisted, never logged, never provisioned to callers as a durable credential.
 - **Production authority request types (broker → watchdog, post-bootstrap only):** exactly five — `Arm`, `ReportHealth`, `RequestLeaseRenewal`, `Heartbeat`, `RequestDecision`. No sixth authority type, no `Disarm`, no OOB handshake.
@@ -143,7 +143,7 @@ Wire DTOs live exclusively in `watchdogd/src/rpc/protocol.rs`. The broker client
 - **Watchdog-owned evaluation:**
   - `ReportHealth` — advisory progress only; carries no invariant result, decision, terminal state, epoch choice, path, or signal target. Broker-supplied health hints cannot override watchdog-owned invariant, lease, or fencing evidence.
   - `RequestDecision` — trigger only; carries no health result, invariant result, decision, terminal state, epoch choice, path, or signal target. The watchdog independently reads/evaluates mandatory invariants (via injected `invariants` interface), its own clock, and lease state before durably choosing `BEGIN_COMMIT` or `BEGIN_REVERT`.
-- Forbidden caller inputs on all post-bootstrap requests: log record bodies; epoch choice; invariant evaluation results presented as authority; terminal state; filesystem paths; signal targets; `BEGIN_*` selection; any field that would let the broker override watchdog-owned invariant/lease/fencing evidence.
+- Forbidden caller inputs on all post-bootstrap requests: log record bodies; epoch choice; invariant evaluation results presented as authority; terminal state; filesystem paths; signal targets; `BEGIN_*` selection; any field that would let the broker override watchdog-owned invariant/lease/fencing evidence. `WorkerGroupTag` is never converted to a syscall target — the `ProcessGroupFence` trait takes no caller-supplied target; a fencer's target (when implemented in a later lane) is fixed at construction by whoever owns the worker.
 - Duplicate/conflicting requests are strictly rejected with **no new authority record**.
 - Response binding: each response carries `{request_id, host_id, tx_id, epoch}` plus capability/counter binding; replays/duplicates fail closed.
 - Uniform errors: no partial durable side effects on refusal.
@@ -157,7 +157,7 @@ Validate and durably record `{host_id, tx_id, epoch, immutable base, deadline, m
 
 ### Lease and heartbeat
 
-Bounded renewable lease bound to `{host_id, tx_id, epoch, lease_id, process_group, deadline}`:
+Bounded renewable lease bound to `{host_id, tx_id, epoch, lease_id, worker_group_tag, deadline}`:
 
 - Authenticated local heartbeat/progress messages gated by post-bootstrap `SessionEstablished` capability + strictly monotonic counter binding; deterministic clock, entropy, and authenticator fakes.
 - Replays, wrong binding, clock regression, late renewal, liveness ambiguity → fail closed.
@@ -165,16 +165,34 @@ Bounded renewable lease bound to `{host_id, tx_id, epoch, lease_id, process_grou
 
 ### Fencing sequence (on lease expiry)
 
-Ordered, no overlap with recovery decision:
+L03 delivers the **ordering/non-overlap contract** through injected hermetic `ProcessGroupFence` and `JobInspector` interfaces plus fail-closed production unavailability. L03 provides **no live process-group signaling** — `watchdogd` is a library-only crate with no daemon; production fencing is `UnavailableProcessGroupFencer` (returns `FenceError::Unavailable`; `group_alive` resolves ambiguity toward "still alive"). On lease expiry where real fencing is unavailable or ambiguous, the watchdog persists safe mode and refuses authority; it must **never** append or return `BEGIN_*` while a worker may survive.
 
-1. `SIGTERM` to entire commit-worker process group.
-2. Bounded wait.
-3. `SIGKILL` to entire process group.
-4. Confirmed group exit.
-5. Candidate-job inventory empty (injected `JobInspector`).
-6. Only then inspect durable state and emit recovery decision response.
+Hermetic ordering contract (enforced via recording fakes, no real signals):
 
-Failure to signal, wait, prove exit, or prove zero jobs → safe mode / refusal. Expired lease must never overlap a surviving commit worker or revert (L03-AC08, AC09).
+1. `signal(Term)` on injected fencer.
+2. `bounded_wait` on injected fencer.
+3. Observe `group_alive(AfterTerm)` — result **consumed**, not discarded.
+4. `signal(Kill)` on injected fencer.
+5. Observe `group_alive(AfterKill)`.
+6. `candidate_job_count` zero (injected `JobInspector`).
+7. Only then inspect durable state and emit recovery decision response.
+
+Failure at any step → safe mode / refusal. Expired lease must never overlap a surviving commit worker or revert (L03-AC08, AC09) — satisfied by construction when production fencing is unavailable and authority is refused.
+
+**Deferred to later daemon lane:** real termination proof using watchdog-minted cgroup-v2 worker handles and `cgroup.kill`. That lane owns the daemon, cgroup delegation, and systemd integration (H-03/L05+).
+
+### Later-lane fencing invariants (normative, binding on future signaling)
+
+Recorded now for the lane that reintroduces live fencing:
+
+- The signal target is **never caller-selected**; the target set may only **shrink**; ambiguity never widens it or grants authority.
+- **`saturating_neg` is forbidden** on any value that might reach a syscall (it turns `1` into session broadcast and `i32::MIN` into `i32::MAX`). Use `checked_neg()` only on values already proven `>= 2` and already proven owned.
+- `ESRCH` on an unproven target means nothing — never treat as success. `ESRCH` on a proven-owned target means target absent.
+- `EPERM` → `FenceError::Ambiguous` → safe mode. Not "alive, escalate."
+- `waitpid` `ECHILD` is not proof of exit; exit proof must come from pidfd/cgroup handle.
+- Any other errno (`EINVAL`, …) → safe mode. No retry, no broadening.
+- Bounded wait expires → `FenceError::Incomplete` → safe mode. Never extend deadline, widen target, or escalate signal scope.
+- Group liveness unknown → treat as alive **and** refuse; "alive" must never trigger a broader signal.
 
 ## 4. Acceptance traceability
 
@@ -187,7 +205,7 @@ Failure to signal, wait, prove exit, or prove zero jobs → safe mode / refusal.
 | **L03-AC05** | `watchdogd/arming.rs`, `watchdogd/invariants.rs` | Arming validation matrix: moved base, wrong epoch, duplicate/conflicting arming (no new authority record), weakened mandatory invariants, expired deadline, ambiguity; additive manifest-only strictness |
 | **L03-AC06** | `watchdogd/authority.rs`, `broker/transaction/recovery.rs` (existing safe-mode on watchdog WAL) | Only watchdog selects `BEGIN_COMMIT`/`BEGIN_REVERT` from its own invariant/clock/lease evaluation; broker-supplied observations cannot override watchdog-owned evidence; duplicate/stale/unknown/malformed/moved-base/wrong-epoch/expired-lease/corrupt-log/ambiguous requests cannot cause or override decision; broker WAL with watchdog-owned states still fails closed |
 | **L03-AC07** | `watchdogd/lease.rs`, `watchdogd/auth.rs` | Lease renewal/expiry; heartbeat capability+counter binding; clock regression/replay/wrong-binding tests with deterministic fakes; local process auth only; production OOB signing not claimed |
-| **L03-AC08** | `watchdogd/fencing.rs`, `watchdogd/fakes/{process,job}.rs`, `watchdogd/tests/fencing_fixture.rs` | SIGTERM→wait→SIGKILL→group exit→zero jobs ordering; bounded spawned-fixture test; failure injection keeps safe mode; no overlap with revert |
+| **L03-AC08** | `watchdogd/fencing.rs`, `watchdogd/interfaces.rs`, `watchdogd/fakes/{process,job}.rs`, `watchdogd/tests/fencing_seam.rs` | Hermetic recording-fake ordering matrix: Term → bounded_wait → AfterTerm liveness (consumed) → Kill → AfterKill liveness → zero jobs; `UnavailableProcessGroupFencer` → safe mode with no authority record; source-level proof that `watchdogd/src/**` contains no `libc::kill`, `libc::waitpid`, `libc::killpg`, or `libc::sigqueue` and `fencing.rs` contains no `unsafe`; no overlap with revert. Real termination proof deferred to later daemon lane (watchdog-minted cgroup-v2 handles, `cgroup.kill`). **No spawned fixture; no real-signal tests on developer/login/shared-runner hosts.** |
 | **L03-AC09** | `watchdogd/tests/l03_failure_matrix.rs` (planned) | Hermetic matrix: corrupt/truncated log; epoch rollback/mismatch; stale/malformed/duplicate/unknown RPC; `SessionBind` stale reconnect; capability/counter/binding mismatch; bad frame length/CRC/version; deny-unknown JSON via frame codec; moved base; wrong epoch; expired lease; stopped heartbeat; process survivor; job survivor; every fsync/rename/readback boundary; unavailable store; restart reconstruction; safe-mode persistence |
 | **L03-AC10** | `watchdogd/interfaces.rs`, `watchdogd/fakes/`, PLAN non-goals §1 | All externals injected; tests need no root/NixOS/systemd/Proxmox/credentials; explicit statement: no hostile-root boundary, no Gate 1 exit evidence |
 | **L03-AC11** | `plans/AGB-8/{PLAN,RESULT,red-evidence}.md` | PLAN before production; RED tests/fixtures only against unchanged production; focused RED bare/unpiped with causal non-zero output; smallest GREEN; RESULT with exact current-head commands; DCO on every commit |
@@ -220,10 +238,12 @@ Failure to signal, wait, prove exit, or prove zero jobs → safe mode / refusal.
 | Response binding mismatch | Response capability/counter/request ID does not match request | Fail closed on decode |
 | Unix socket authenticated flow | `connect → SessionBind → SessionEstablished → Arm → bound response` | Full codec path; `ARMED` only after valid bootstrap + bound post-bootstrap exchange |
 | Stale epoch on RPC | Reuse old epoch after increment | Fail closed; no new authority record |
-| Heartbeat wrong lease binding | Mismatched `lease_id`/`process_group` | Fail closed |
+| Heartbeat wrong lease binding | Mismatched `lease_id`/`worker_group_tag` | Fail closed |
 | Clock regression | Decrease fake clock on renewal | Fail closed |
-| Lease expiry with live worker | Process fake survives SIGTERM | Safe mode; no `BEGIN_*` until fenced |
+| Lease expiry with live worker | `UnavailableProcessGroupFencer` or recording fake simulating survivor | Safe mode; no `BEGIN_*`; no authority record |
 | Job survivor after fence | JobInspector reports non-zero | Safe mode; no recovery decision |
+| WorkerGroupTag decode rejection | Wire values `0`, `1`, negative, or `> i32::MAX` | Uniform `MalformedRequest`; no binding |
+| Fencing unavailable at expiry | Production `UnavailableProcessGroupFencer` | Safe mode; refuse authority; worker may survive but no `BEGIN_*` |
 | fsync failure on append | Durability fake fails file fsync | No accepted record; error to caller |
 | rename failure on epoch | Durability fake fails rename | Safe mode; epoch not advanced |
 | Unavailable store | Open returns EIO | Safe mode at startup |
@@ -234,7 +254,23 @@ Failure to signal, wait, prove exit, or prove zero jobs → safe mode / refusal.
 
 ## 6. Verification commands
 
-Full GREEN gates (bare/unpiped):
+### Command safety classification
+
+**Forbidden outside an isolated private PID namespace/container at any head at or before `789ec353e6cdac98b8946b93dd538b2bd32a75b9`:**
+
+- `cargo test -p agentbed-watchdogd --test fencing_fixture`
+- `cargo test --workspace` (compiles and runs `fencing_fixture`)
+- `cargo test -p agentbed-watchdogd` (same)
+
+These commands are unsafe on developer/login/shared-runner hosts because `fencing_fixture.rs` issues real `kill`/`waitpid` syscalls. **After the RED commit deletes `fencing_fixture.rs`, ordinary hermetic test commands become safe.**
+
+Any future real-signal proof (not L03) requires: `#[ignore]`, env gate `AGENTBED_ALLOW_REAL_SIGNALS=1`, and runtime assertion that `getpid() == 1` (PID 1 of a private PID namespace) which aborts before spawning if false. Never on developer, login, or CI-runner sessions.
+
+**Safe at every head:** `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace --all-targets`, `git diff --check 01a4bf8c8de2a5cb4544bf74af9bb819c29adf1c..HEAD`.
+
+### Full GREEN gates (bare/unpiped)
+
+After fencing-safety RED (fixture deleted):
 
 ```bash
 cargo fmt --all -- --check
@@ -247,12 +283,14 @@ git diff --check 01a4bf8c8de2a5cb4544bf74af9bb819c29adf1c..HEAD
 Focused L03 hermetic suites (RED and GREEN):
 
 ```bash
-cargo test -p agentbed-watchdogd
+cargo test -p agentbed-watchdogd --test fencing_seam
+cargo test -p agentbed-watchdogd --test l03_failure_matrix
+cargo test -p agentbed-watchdogd --test l03_review_repair
 cargo test -p agentbed-broker --test l03_watchdog_client
-cargo test -p agentbed-adapter-nix -- protected_broker_state
+cargo test -p agentbed-adapter-nix --test l03_protected_broker_state
 ```
 
-RED checkpoint: execute focused suites against **unchanged** production (`watchdogd` stub); preserve unpiped causal non-zero output in `plans/AGB-8/red-evidence.txt`.
+RED checkpoint (fencing-safety repair): tests/fixtures/evidence only against unchanged production; delete `fencing_fixture.rs`; add `fencing_seam.rs`; preserve unpiped causal non-zero output in evidence. RED must fail causally on (a) missing `WorkerGroupTag`, (b) source-scan absence assertion while `libc::kill` still exists in `fencing.rs`.
 
 ### Named RED tests and evidence expectations (L03-AC04 subset)
 
@@ -275,7 +313,7 @@ Tests construct adverse frames by mutating `encode_frame` output in test-local h
 
 ## 7. Rollback and stop conditions
 
-Stop if decision log shares rollback/WAL domain or topology proof accepts fallback directory. Stop if broker can append or select `BEGIN_*`/terminal records. Stop if expired lease can overlap a surviving worker, revert, or candidate job. Stop if L03 claims live mount provisioning, OOB implementation, or Gate 1 exit evidence.
+Stop if decision log shares rollback/WAL domain or topology proof accepts fallback directory. Stop if broker can append or select `BEGIN_*`/terminal records. Stop if expired lease can overlap a surviving worker, revert, or candidate job **with an authority record appended**. Stop if L03 claims live mount provisioning, live process-group signaling, OOB implementation, or Gate 1 exit evidence. Stop if real-signal tests run on developer/login/shared-runner hosts.
 
 Revert leaves watchdog disarmed and candidate/base unchanged. Hermetic tests use temp stores only.
 
@@ -286,12 +324,13 @@ Branch `agent/agb-8/l03-watchdog-decision-authority`, PR `AGB-8: Watchdog decisi
 | Phase | Content | Stop after |
 |---|---|---|
 | **PLAN** (this artifact) | `plans/AGB-8/PLAN.md` only | Coordinator readback |
-| **RED** | Tests, fixtures, `red-evidence.txt` only; production unchanged | Independent RED acceptance |
-| **GREEN** | Smallest implementation; `plans/AGB-8/RESULT.md` | Push branch, open PR, `in_review` |
+| **RED** (fencing safety) | Delete `fencing_fixture.rs`; add `fencing_seam.rs`; tests/fixtures/evidence only; production unchanged | Independent RED acceptance |
+| **GREEN** (fencing safety) | `WorkerGroupTag`, `UnavailableProcessGroupFencer`, remove syscall code; smallest implementation | Coordinator readback |
+| **RESULT** | Update `plans/AGB-8/RESULT.md` with fencing-safety repair evidence | Push branch, `in_review` |
 | **Review/merge** | Current-head CI, scenario matrix verification, `agentos-reviewer` | Explicit L-P `merge AGB-8` only |
 
 TDD: PLAN → RED (tests only) → GREEN (implementation) → RESULT. DCO sign-off (`git commit -s`) on every commit. Repairs stay on same issue/branch/worktree/PR; head change invalidates prior gates.
 
 ## 9. Gate exit honesty
 
-L03 delivers hermetic proof of watchdog-only durable authority, local RPC boundary, arming/invariants, leases/heartbeats, fencing ordering, and epoch/safe-mode fail-closed behavior. It does **not** close Gate 1. Gate 1 exit requires L04–L08 evidence including live OOB, spare-node chaos matrix, and authorized infrastructure runs — all explicitly out of scope here.
+L03 delivers hermetic proof of watchdog-only durable authority, local RPC boundary, arming/invariants, leases/heartbeats, fencing ordering contract (via injected fakes + fail-closed production unavailability), and epoch/safe-mode fail-closed behavior. It does **not** provide live process-group signaling, create a hostile-root boundary, or close Gate 1. Gate 1 exit requires L04–L08 evidence including live OOB, spare-node chaos matrix, real cgroup-v2 fencing, and authorized infrastructure runs — all explicitly out of scope here.
