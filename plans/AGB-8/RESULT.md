@@ -25,9 +25,9 @@ The immutable PR ref and gate tracker (GitHub #12) are authoritative for the fin
 | RED (constructor safety) | `dffd5bdbdece9c9a9e1a7753e76623a2c50b2e33` | `plans/AGB-8/fencing-constructor-red-evidence.txt` + additive `fencing_seam.rs` tests |
 | GREEN (constructor safety) | `1a510e2360cec73426f2f1853875d60c9f66ee91` | removed `from_trusted_i32`; public constructors consume `WorkerGroupTag` only |
 | **Rejected remote PR head** | `7c4e2b76f9ec68d910de650ebd73c31b1b084e8b` | last pushed head before bounded closure repair |
-| RED (bounded closure G1–G3) | `fba4c7816b57d57be0bad76645c2faad05116181` | `watchdogd/tests/l03_scenario_round2.rs` (14 tests) + `plans/AGB-8/scenario-round2-red-evidence.txt` |
+| RED (bounded closure G1–G3) | `fba4c7816b57d57be0bad76645c2faad05116181` | `watchdogd/tests/l03_scenario_round2.rs` (**12** tests) + `plans/AGB-8/scenario-round2-red-evidence.txt` |
 | GREEN (G2/G3 durability) | `a04a4252015c190d36cb392157760cf7dcc6419e` | safe-mode latch on durability failures; same-directory temps; ambiguous temp refusal |
-| RED (G3 sequencing micro) | `35a52f9db1f84a6b06e05290494cd86b278e5e92` | two additive sequencing oracle tests in `l03_scenario_round2.rs` |
+| RED (G3 sequencing micro) | `35a52f9db1f84a6b06e05290494cd86b278e5e92` | two additive sequencing oracle tests in `l03_scenario_round2.rs` (**14** total) |
 | GREEN (G3 sequencing) | `25379c25bc6335c5dce59f703a0189332fe59f66` | dir-fsync before readback; safe-mode marker readback after parent fsync |
 | GREEN (B1 topology G1) | `113b53341302a330162c1acee27f614c8927cde5` | substantive `ProductionTopologyProbe` in `topology.rs` |
 | GREEN (B1 fidelity repair) | `6186d7a9136b0e0891701806e1c0bfc6d8346fe7` | protected-path metadata, unique mount lookups, shared evaluators |
@@ -73,7 +73,7 @@ Full closure matrix: `l03_scenario_round2` **14/14** at accepted local implement
 | **F5** | `UnavailableProcessGroupFencer: ProcessGroupFence`; fence wait failure latches safe mode |
 | **F6** | Arming refused while any transaction remains armed |
 | **F7** | Moved base and expired arming deadline rechecked at decision time |
-| **F8** | Accepted-stream `SO_PEERCRED` via `StreamPeerAuth`; socket read/write timeouts; capability binds peer pid/uid/gid |
+| **F8** | Accepted-stream `SO_PEERCRED` via `StreamPeerAuth` during `SessionBind`; session capability derived at bind; post-bind requests validate stored capability and monotonic counter (not continuous peer-credential re-derivation); socket read/write timeouts |
 | **F9** | Arm epoch must meet durable high-water authority, not session-only |
 | **F10** | Decision log reader rejects decreasing epoch |
 | **F11** | Append uses `O_NOFOLLOW` and post-write `Durability` fsync seam |
@@ -130,7 +130,7 @@ cargo test -p agentbed-watchdogd --test fencing_seam                      (10 ex
 cargo test -p agentbed-watchdogd --test l03_failure_matrix                (54 expected)
 cargo test -p agentbed-watchdogd --test l03_review_repair                 (19 expected)
 cargo test -p agentbed-broker --test l03_watchdog_client                  (9 expected)
-cargo test -p agentbed-nix --test l03_protected_broker_state              (6 expected)
+cargo test -p agentbed-adapter-nix --test l03_protected_broker_state              (6 expected)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace --all-targets
