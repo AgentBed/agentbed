@@ -21,7 +21,7 @@
 | RED (fencing-safety) | `5b5d20798eee2eddd5f9e3110365dbd9945419c8` | `plans/AGB-8/fencing-safety-red-evidence.txt` + `watchdogd/tests/fencing_seam.rs`; `fencing_fixture.rs` deleted |
 | GREEN (fencing-safety) | `02267647dc784a7ef96ca5eb4f65b26c39a2c162` | `WorkerGroupTag`, `UnavailableProcessGroupFencer`, sealed 9-step fence ordering; no real signaling |
 | RED (constructor safety) | `dffd5bdbdece9c9a9e1a7753e76623a2c50b2e33` | `plans/AGB-8/fencing-constructor-red-evidence.txt` + additive `fencing_seam.rs` tests |
-| GREEN (constructor safety) | *(this head)* | removed `from_trusted_i32`; public constructors consume `WorkerGroupTag` only |
+| GREEN (constructor safety) | `1a510e2360cec73426f2f1853875d60c9f66ee91` | removed `from_trusted_i32`; public constructors consume `WorkerGroupTag` only |
 
 Accepted initial RED tests/fixtures/evidence remain byte-identical to `58ec7da` except superseded fencing paths. Fencing-safety RED oracle semantics preserved through `5b5d207`. Constructor-safety RED at `dffd5bdb` adds two additive `fencing_seam` tests (10 total); all pass after constructor GREEN.
 
