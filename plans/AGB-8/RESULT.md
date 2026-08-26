@@ -32,6 +32,9 @@ The immutable PR ref and gate tracker (GitHub #12) are authoritative for the fin
 | GREEN (B1 topology G1) | `113b53341302a330162c1acee27f614c8927cde5` | substantive `ProductionTopologyProbe` in `topology.rs` |
 | GREEN (B1 fidelity repair) | `6186d7a9136b0e0891701806e1c0bfc6d8346fe7` | protected-path metadata, unique mount lookups, shared evaluators |
 | GREEN (B1 final fidelity) | `f572496e6ce1e3262d9cef3edbc7215b03267f74` | mountinfo whitelist escapes, `symlink_metadata` layout inspection, probe cleanup |
+| **Rejected remote PR head (round 2)** | `f5532bf6ce7dd22261f5acd95d42113d22287838` | last pushed head before frozen G3 round-3 repair |
+| RED (G3 round-3 read-dir ambiguity) | `87e722234cf0bf70a74814eeea6c8d9dbe9d17f5` | `plans/AGB-8/scenario-round3-read-dir-red-evidence.txt` + `g3_unreadable_parent_dir_temp_residue_is_ambiguous` in `l03_scenario_round2.rs` (**15** total) |
+| GREEN (G3 round-3 fail-closed) | `721267e50017c65704f3d4ace0b61c1e9d5c81b7` | `ambiguous_temp_residue` in `durability_store.rs`: `read_dir` and per-entry errors map to ambiguity |
 
 Accepted initial RED tests/fixtures/evidence remain byte-identical to `58ec7da` except superseded fencing paths. Fencing-safety RED oracle semantics preserved through `5b5d207`. Constructor-safety RED at `dffd5bdb` adds two additive `fencing_seam` tests (10 total).
 
@@ -45,9 +48,11 @@ Independent scenario verifier run `00951621-3f57-4a94-ab48-5c13bebf5381` at exac
 |---|---|---|
 | **G1 — production topology proof** | `ProductionTopologyProbe` was a stub; no mount/device/ownership/durability proof | RED `fba4c781` → GREEN `113b533`, `6186d7a`, `f572496`; `l03_scenario_round2` G1 4/4; topology lib unit tests 19/19 |
 | **G2 — durability failures not latching safe mode** | post-write fsync/rename/dir-fsync failures returned typed errors without in-memory safe-mode latch | GREEN `a04a425` (`latch_safe_mode_best_effort`); `l03_scenario_round2` G2 4/4 |
-| **G3 — cross-directory temp + ambiguity** | epoch/safe-mode temps under store root; ambiguous legacy temps not refused; durability order wrong | GREEN `a04a425` (same-target-dir temps, ambiguity refusal); micro-RED `35a52f9` → GREEN `25379c2` (dir-fsync before readback, marker readback); `l03_scenario_round2` G3 6/6 |
+| **G3 — cross-directory temp + ambiguity** | epoch/safe-mode temps under store root; ambiguous legacy temps not refused; durability order wrong; `read_dir` failure treated as nonblocking | GREEN `a04a425` (same-target-dir temps, ambiguity refusal); micro-RED `35a52f9` → GREEN `25379c2` (dir-fsync before readback, marker readback); round-3 RED `87e7222` → GREEN `721267e` (`read_dir` and per-entry enumeration errors fail closed); `l03_scenario_round2` G3 **7/7** |
 
-Full closure matrix: `l03_scenario_round2` **14/14** at accepted local implementation head.
+Independent scenario verifier run `623845d0-c905-4add-a25a-4156162decb3` initially returned **APPROVED** at `f5532bf6ce7dd22261f5acd95d42113d22287838`, but its own follow-up identified `read_dir` failure as nonblocking. Coordinator reproduced parent mode `0300` (write+execute, no read) where directory enumeration failed `EACCES` while same-directory `O_EXCL` temp creation succeeded and stale temp residue remained — superseding approval for frozen G3 only; other G1/G2/fencing findings from that run remain valid evidence.
+
+Full closure matrix: `l03_scenario_round2` **15/15** at accepted local implementation head (G2 4/4 + G3 7/7 = **11/11**).
 
 ## Critical fencing incident — root cause and safe design
 
@@ -84,11 +89,11 @@ Full closure matrix: `l03_scenario_round2` **14/14** at accepted local implement
 
 **Topology (`ProductionTopologyProbe`):** before arming, proves the supplied path is the exact sealed mount at `/var/lib/agentbed/watchdog` using unique `/proc/self/mountinfo` evidence (validated `major:minor`, whitelisted octal escapes only, absolute mount points). Rejects lexical traversal and `symlink_metadata` symlink components on the store path and every protected domain (`/`, `/nix`, `/nix/store`, broker state, rollback). Requires each protected path to exist with actual `symlink_metadata().dev()`; compares mount ID and `st_dev` against the store (no mountinfo device fabrication). Inspects known existing subdirs/files via `symlink_metadata` only (`NotFound` = optional absent); enforces root-owned dir `0700`, regular file modes, `nlink==1`. Proves writable same-directory atomic replacement: O_EXCL temp → write → file fsync → rename → parent dir fsync → readback → verified cleanup (RAII on error paths). Ordinary temp directories without an exact mount entry receive `OrdinaryDirectoryFallback`.
 
-**Durability / safe mode:** epoch and safe-mode markers use unique same-target-directory `O_EXCL` temps; ambiguous legacy temp residue is refused; durability order is file fsync → atomic rename → parent dir fsync → readback. Post-write durability failures call `latch_safe_mode_best_effort()` (in-memory latch + best-effort durable marker persist) while preserving the original typed `RpcError`/`Durability` response.
+**Durability / safe mode:** epoch and safe-mode markers use unique same-target-directory `O_EXCL` temps; ambiguous legacy temp residue is refused — both initial `read_dir(parent)` errors and per-entry enumeration errors in `ambiguous_temp_residue` map to ambiguity (fail closed), not silent skip; durability order is file fsync → atomic rename → parent dir fsync → readback. Post-write durability failures call `latch_safe_mode_best_effort()` (in-memory latch + best-effort durable marker persist) while preserving the original typed `RpcError`/`Durability` response.
 
 ## Scope delivered
 
-Hermetic L03 watchdog decision authority: durable append-only decision log and epoch high-water store; fail-closed safe-mode and external-floor handling; injected topology/durability/process-group/job/invariant interfaces; framed authenticated local RPC (`SessionBind` with `worker_group_tag` → `SessionEstablished` → five production request types); broker narrow client stub (wire DTOs only); Nix protected-resource rejection for `/var/lib/agentbed/broker/state`; `UnavailableProcessGroupFencer` (no syscall fencing); production topology probe; `fencing_seam.rs` (10 tests); closure scenario round 2 (14 tests); failure matrix (54 tests); review repair suite (19 tests); topology lib unit tests (19).
+Hermetic L03 watchdog decision authority: durable append-only decision log and epoch high-water store; fail-closed safe-mode and external-floor handling; injected topology/durability/process-group/job/invariant interfaces; framed authenticated local RPC (`SessionBind` with `worker_group_tag` → `SessionEstablished` → five production request types); broker narrow client stub (wire DTOs only); Nix protected-resource rejection for `/var/lib/agentbed/broker/state`; `UnavailableProcessGroupFencer` (no syscall fencing); production topology probe; `fencing_seam.rs` (10 tests); closure scenario round 2 (15 tests); failure matrix (54 tests); review repair suite (19 tests); topology lib unit tests (19).
 
 Production paths:
 
@@ -106,13 +111,13 @@ Production paths:
 |---|---|
 | **L03-AC01** | `watchdogd/src/topology.rs` (`ProductionTopologyProbe`); `watchdogd/src/interfaces.rs`; `adapters/nix/src/protected.rs`; `watchdogd/tests/l03_failure_matrix.rs` topology matrix; `watchdogd/tests/l03_scenario_round2.rs` G1 (4); topology lib tests (19); `adapters/nix/tests/l03_protected_broker_state.rs` (6 tests) |
 | **L03-AC02** | `watchdogd/src/read_model.rs`, `watchdogd/src/core.rs`; `broker/src/watchdog/client.rs`; matrix AC02 + `broker/tests/l03_watchdog_client.rs`; review F1/F10/F11 |
-| **L03-AC03** | `watchdogd/src/core.rs`, `watchdogd/src/durability_store.rs`, `watchdogd/src/read_model.rs`; epoch/safe-mode/fsync/rename/readback matrix; `l03_scenario_round2` G2/G3 (10); review F2/F3/F9 |
+| **L03-AC03** | `watchdogd/src/core.rs`, `watchdogd/src/durability_store.rs`, `watchdogd/src/read_model.rs`; epoch/safe-mode/fsync/rename/readback matrix; `l03_scenario_round2` G2/G3 (**11**); round-3 `g3_unreadable_parent_dir_temp_residue_is_ambiguous`; review F2/F3/F9 |
 | **L03-AC04** | `watchdogd/src/rpc/{protocol,server}.rs`, `watchdogd/src/session.rs`, `watchdogd/src/peercred.rs`, `watchdogd/src/worker_group_tag.rs`; `broker/src/watchdog/client.rs`; frame codec, stream peercred, session bootstrap, counter/capability binding, socket permissions, unix round-trip; review F8 |
 | **L03-AC05** | `watchdogd/src/core.rs` arming validation; matrix AC05; review F6/F7/F14 |
 | **L03-AC06** | `watchdogd/src/core.rs` authority selection; broker WAL safe-mode tests; review F15 |
 | **L03-AC07** | `watchdogd/src/session.rs`, `watchdogd/src/core.rs` lease/heartbeat with `worker_group_tag`; matrix AC07; review F15 late renewal |
 | **L03-AC08** | `watchdogd/src/fencing.rs` (`UnavailableProcessGroupFencer`); `watchdogd/tests/fencing_seam.rs` (10/10); matrix AC08 + review F5; no spawned fixture; `watchdogd/src/**` contains no `libc::kill`/`waitpid`/`killpg`/`sigqueue` |
-| **L03-AC09** | `watchdogd/tests/l03_failure_matrix.rs` (54) + `watchdogd/tests/l03_review_repair.rs` (19) + `watchdogd/tests/l03_scenario_round2.rs` (14) + `watchdogd/tests/fencing_seam.rs` (10) |
+| **L03-AC09** | `watchdogd/tests/l03_failure_matrix.rs` (54) + `watchdogd/tests/l03_review_repair.rs` (19) + `watchdogd/tests/l03_scenario_round2.rs` (15) + `watchdogd/tests/fencing_seam.rs` (10) |
 | **L03-AC10** | `watchdogd/src/interfaces.rs` + test fakes under `watchdogd/tests/common/`; PLAN §1 assumption 4 — no hostile-root boundary claimed |
 | **L03-AC11** | This `RESULT.md`, bounded closure RED/GREEN chain above, verification commands below (bare/unpiped, exit 0) |
 | **L03-AC12** | No L04/L05/live install/OOB/credentials/router changes; hermetic tests only; no merge |
@@ -125,7 +130,7 @@ watchdogd/tests/fencing_fixture.rs absent
 no libc::kill / libc::waitpid / killpg / sigqueue / from_trusted_i32 in watchdogd/src/**
 
 cargo test -p agentbed-watchdogd --lib                                    (19 expected)
-cargo test -p agentbed-watchdogd --test l03_scenario_round2               (14 expected)
+cargo test -p agentbed-watchdogd --test l03_scenario_round2               (15 expected)
 cargo test -p agentbed-watchdogd --test fencing_seam                      (10 expected)
 cargo test -p agentbed-watchdogd --test l03_failure_matrix                (54 expected)
 cargo test -p agentbed-watchdogd --test l03_review_repair                 (19 expected)
