@@ -1,7 +1,7 @@
 //! Watchdog core: durable authority, session binding, and request handling.
 
 use crate::durability_store::{
-    durable_atomic_rename, persist_safe_mode_marker, unique_temp_path, LEGACY_EPOCH_TEMP,
+    ambiguous_epoch_temp_residue, durable_atomic_rename, persist_safe_mode_marker, unique_temp_path,
 };
 use crate::error::{DurabilityError, ExternalFloorError, RpcError, TopologyError, WatchdogError};
 use crate::interfaces::{Dependencies, FenceStage, InvariantOutcome, SignalKind};
@@ -472,6 +472,7 @@ impl WatchdogCore {
             .checked_add(1)
             .ok_or(RpcError::SafeModeActive)?;
         if let Err(error) = append_record(&path, sequence, epoch, kind, &*self.deps.durability) {
+            self.latch_safe_mode_best_effort();
             return Err(RpcError::Durability(error));
         }
         self.log_seq = sequence;
@@ -480,28 +481,27 @@ impl WatchdogCore {
 
     fn advance_epoch(&mut self, epoch: u64) -> Result<(), RpcError> {
         let path = self.config.store_root.join(EPOCH_HIGH_WATER_REL);
-        if let Some(parent) = path.parent() {
-            let legacy_tmp = parent.join(LEGACY_EPOCH_TEMP);
-            if legacy_tmp.exists() {
-                self.enter_safe_mode()?;
-                return Err(RpcError::SafeModeActive);
-            }
-            if fs::create_dir_all(parent).is_err() {
-                self.enter_safe_mode()?;
-                return Err(RpcError::SafeModeActive);
-            }
+        let parent = path.parent().ok_or(RpcError::SafeModeActive)?;
+        if ambiguous_epoch_temp_residue(parent) {
+            self.enter_safe_mode()?;
+            return Err(RpcError::SafeModeActive);
+        }
+        if fs::create_dir_all(parent).is_err() {
+            self.enter_safe_mode()?;
+            return Err(RpcError::SafeModeActive);
         }
         let current = read_epoch_file(&path).unwrap_or(0);
         if epoch < current {
             return Err(RpcError::StaleEpoch);
         }
         let bytes = epoch_bytes(epoch);
-        let tmp = unique_temp_path(&self.config.store_root, "epoch");
+        let tmp = unique_temp_path(parent, "epoch");
         if write_epoch_temp_exclusive(&tmp, &bytes).is_err() {
             self.enter_safe_mode()?;
             return Err(RpcError::SafeModeActive);
         }
         if let Err(error) = self.deps.durability.file_fsync(&tmp) {
+            self.latch_safe_mode_best_effort();
             return Err(RpcError::Durability(error));
         }
         if durable_atomic_rename(&*self.deps.durability, &tmp, &path).is_err() {
@@ -512,11 +512,16 @@ impl WatchdogCore {
             self.enter_safe_mode()?;
             return Err(RpcError::SafeModeActive);
         }
-        let parent = path.parent().ok_or(RpcError::SafeModeActive)?;
         if let Err(error) = self.deps.durability.dir_fsync(parent) {
+            self.latch_safe_mode_best_effort();
             return Err(RpcError::Durability(error));
         }
         Ok(())
+    }
+
+    fn latch_safe_mode_best_effort(&mut self) {
+        self.safe_mode = true;
+        let _ = persist_safe_mode_marker(&self.config.store_root, &*self.deps.durability);
     }
 
     fn enter_safe_mode(&mut self) -> Result<(), RpcError> {
