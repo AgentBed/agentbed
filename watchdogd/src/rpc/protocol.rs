@@ -215,6 +215,57 @@ impl LocalRequest {
             | Self::RequestDecision { request_id, .. } => request_id,
         }
     }
+
+    pub(crate) fn binding_identity(&self) -> (&str, &str, u64) {
+        match self {
+            Self::Arm {
+                host_id,
+                tx_id,
+                epoch,
+                ..
+            }
+            | Self::ReportHealth {
+                host_id,
+                tx_id,
+                epoch,
+                ..
+            }
+            | Self::RequestLeaseRenewal {
+                host_id,
+                tx_id,
+                epoch,
+                ..
+            }
+            | Self::Heartbeat {
+                host_id,
+                tx_id,
+                epoch,
+                ..
+            }
+            | Self::RequestDecision {
+                host_id,
+                tx_id,
+                epoch,
+                ..
+            } => (host_id, tx_id, *epoch),
+        }
+    }
+
+    pub(crate) fn verify_envelope_binding(
+        &self,
+        envelope_host_id: &str,
+        envelope_tx_id: &str,
+        envelope_epoch: u64,
+    ) -> Result<(), RpcError> {
+        let (host_id, tx_id, epoch) = self.binding_identity();
+        if host_id != envelope_host_id || tx_id != envelope_tx_id {
+            return Err(RpcError::WrongBinding);
+        }
+        if epoch != envelope_epoch {
+            return Err(RpcError::WrongEpoch);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -427,6 +478,9 @@ pub fn decode_request(
     if envelope.request_id != envelope.request.request_id() {
         return Err(RpcError::WrongBinding);
     }
+    envelope
+        .request
+        .verify_envelope_binding(&envelope.host_id, &envelope.tx_id, envelope.epoch)?;
     session.advance_counter(envelope.counter);
     Ok(AuthenticatedRequest {
         request: envelope.request,
