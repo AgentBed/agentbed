@@ -11,7 +11,7 @@ Inspected: `plans/AGB-1/PLAN.md` L03 row; ADR-001 rev. 6; `docs/threat-model.md`
 
 L00–L02 merged: v2 wire contract, durable broker WAL/events/idempotency, Nix propose with semantic class-F rejection and hermetic promotion primitives. `watchdogd` is still an intentional empty stub. Broker engine refuses watchdog-owned WAL states at recovery; happy path stops at `Probation`. L02 protected-path matcher names `/var/lib/agentbed/wal/` but production broker state (and WAL) lives at `/var/lib/agentbed/broker/state` — L03 must close that real-path gap without weakening existing aliases.
 
-This lane implements **watchdog-only durable authority** and the narrow authenticated local broker↔watchdog protocol. It does **not** wire broker transaction orchestration (L04), perform actual promotion/revert execution, install/start the daemon, provision mounts, or implement OOB.
+This lane implements **watchdog-only durable authority** and the narrow authenticated local broker↔watchdog protocol as a **library/protocol/authority contract only** — no daemon binary, entrypoint, lifecycle, cgroup worker-handle minting, service/install/start, or live fencing. It does **not** wire broker transaction orchestration (L04), perform actual promotion/revert execution, provision mounts, or implement OOB. Daemon entrypoint, lifecycle, cgroup ownership, and live fencing remain later-lane work.
 
 ### Consequential assumptions
 
@@ -21,6 +21,7 @@ This lane implements **watchdog-only durable authority** and the narrow authenti
 4. **Process independence, not hostile-root boundary.** Permission/ownership checks and transaction self-protection are real; a malicious root can still alter watchdog files. OOB is the backstop (H-02/H-05, L05+). L03 must state this honestly (L03-AC10).
 5. **External epoch floor is injected only.** L03 provides the outside-domain epoch-store abstraction and an injectable external-floor interface for hermetic mismatch tests. It does not implement OOB mirror placement, signing, or live rollback detection against an external store.
 6. **Session bootstrap is mandatory and non-authority.** `SessionBind`/`SessionEstablished` precede all five production request types; capability is never persisted or logged; reconnect requires exact durable-state match.
+7. **Library-only crate.** `watchdogd` remains library-only with no `[[bin]]`, no `main.rs`, and no production constructor for real signaling. Daemon entrypoint, lifecycle, cgroup ownership/worker-handle minting, service/install/start, and live fencing are later-lane work.
 
 ### Hard non-goals (L03-AC12)
 
@@ -72,7 +73,7 @@ Nix protected-resource matrix must semantically reject watchdog root, runtime/co
 - Decision log, epoch high-water store, and safe-mode marker: regular files, `root:root`, mode `0600`, link count exactly one.
 - Runtime socket directory: `root:root`, mode `0700`; socket: `root:root`, mode `0600`.
 - Reject symlinks, non-regular files, unexpected owner/group/mode, link count other than one, hard-link ambiguity, digest/config mismatch.
-- If unavailable storage prevents persisting the safe-mode marker when fail-closed entry is required, the daemon remains latched in memory, refuses all arming/RPC, and terminates or refuses startup — it must not claim durable safe-mode marking without a persisted marker.
+- If unavailable storage prevents persisting the safe-mode marker when fail-closed entry is required, the in-memory latch remains active, refuses all arming/RPC, and the library runtime must terminate or refuse startup — it must not claim durable safe-mode marking without a persisted marker.
 - L03 exposes **no** binary/config update API. Binary/config immutable while armed. Owner-controlled replacement (outside L03) requires disarm, same-directory temp + file fsync + atomic rename + parent fsync + readback; candidate transactions can never perform it.
 
 ### H-02/H-03 boundaries held
@@ -91,13 +92,12 @@ Watchdog log:  ARMED → PROBATION_PASSED → BEGIN_COMMIT → COMMITTED
                     └──────────── BEGIN_REVERT → REVERTED
 ```
 
-Broker may request transitions; it cannot select or append watchdog-owned records. Only the watchdog durably chooses `BEGIN_COMMIT` versus `BEGIN_REVERT`. L04 wires broker engine to these answers; L03 delivers the daemon/library boundary and hermetic proof.
+Broker may request transitions; it cannot select or append watchdog-owned records. Only the watchdog durably chooses `BEGIN_COMMIT` versus `BEGIN_REVERT`. L04 wires broker engine to these answers; L03 delivers the library protocol and authority contract plus hermetic proof.
 
 ### Component layout
 
 ```
 watchdogd/src/
-  main.rs               — non-installing daemon entry boundary; no systemd unit/service/install/start (L03-AC12)
   topology.rs           — mount/device proof, path normalization, permission checks (L03-AC01)
   storage/
     decision_log.rs     — framed append-only log, single writer (L03-AC02)
@@ -114,7 +114,7 @@ watchdogd/src/
   fencing.rs            — injected `ProcessGroupFence` ordering contract; production unavailability (L03-AC08)
   invariants.rs         — mandatory invariant observation interface (injected; watchdog reads)
   interfaces.rs         — Clock, Entropy, ProcessGroupFence, JobInspector, Topology, ExternalFloor, WorkerGroupTag
-  lib.rs                — library surface for hermetic tests
+  lib.rs                — library surface; no `[[bin]]` or `main.rs` in L03 (L03-AC12)
   fakes/                — hermetic doubles for all injected interfaces (L03-AC10)
   tests/                — crate integration + hermetic fencing-seam tests (L03-AC08, AC09)
 
@@ -136,8 +136,8 @@ Wire DTOs live exclusively in `watchdogd/src/rpc/protocol.rs`. The broker client
 - **Local process authentication** (not OOB signing, not a hostile-root boundary):
   1. Server derives peer identity from `SO_PEERCRED` and verifies it matches the exact configured broker peer `{uid, gid}` from `watchdog.json`. Wrong peer is refused before any handler.
   2. **Session bootstrap (non-authority control exchange, mandatory before the five production request types):** after peer verification, the client sends a bounded strict `SessionBind` control envelope carrying **only** `{host_id, tx_id, epoch, lease_id, worker_group_tag, client_nonce}`. `worker_group_tag` is an opaque `WorkerGroupTag` newtype over `u32` — correlation/binding data only, never a signal target. `TryFrom<u32>` rejects `0`, `1`, and values above `i32::MAX`; negative JSON values fail decoding as `MalformedRequest`. The watchdog validates that binding against durable/current state (new transaction or exact reconnect), mints an entropy-backed 256-bit capability bound to peer `{pid, uid, gid}` plus those fields, and returns `SessionEstablished {capability, server_nonce, counter=0}`. This control exchange cannot carry health/invariant/decision/terminal/path/signal inputs and **cannot append authority records**. It is **not** a sixth authority request, **not** `Disarm`, and **not** OOB.
-  3. **Post-bootstrap binding:** every one of the five production request envelopes and every response carries and validates the exact capability, request ID, host/tx/epoch binding, and strictly monotonic counter. Old capabilities die on reconnect or daemon restart. A reconnect may establish a new capability only when `SessionBind` exactly matches reconstructed durable state; unknown/stale/conflicting bindings fail closed with **no new authority record**.
-  4. Capability is connection/daemon-lifetime only: never persisted, never logged, never provisioned to callers as a durable credential.
+  3. **Post-bootstrap binding:** every one of the five production request envelopes and every response carries and validates the exact capability, request ID, host/tx/epoch binding, and strictly monotonic counter. Old capabilities die on reconnect or RPC server restart. A reconnect may establish a new capability only when `SessionBind` exactly matches reconstructed durable state; unknown/stale/conflicting bindings fail closed with **no new authority record**.
+  4. Capability is connection/session-lifetime only: never persisted, never logged, never provisioned to callers as a durable credential.
 - **Production authority request types (broker → watchdog, post-bootstrap only):** exactly five — `Arm`, `ReportHealth`, `RequestLeaseRenewal`, `Heartbeat`, `RequestDecision`. No sixth authority type, no `Disarm`, no OOB handshake.
 - **No production `Disarm` or admin hook.** No caller-visible RPC may disarm, clear safe mode, or choose terminal authority. Test helpers that simulate disarm or safe-mode clear are non-wire, test-only, and not part of the production protocol.
 - **Watchdog-owned evaluation:**
@@ -333,4 +333,4 @@ TDD: PLAN → RED (tests only) → GREEN (implementation) → RESULT. DCO sign-o
 
 ## 9. Gate exit honesty
 
-L03 delivers hermetic proof of watchdog-only durable authority, local RPC boundary, arming/invariants, leases/heartbeats, fencing ordering contract (via injected fakes + fail-closed production unavailability), and epoch/safe-mode fail-closed behavior. It does **not** provide live process-group signaling, create a hostile-root boundary, or close Gate 1. Gate 1 exit requires L04–L08 evidence including live OOB, spare-node chaos matrix, real cgroup-v2 fencing, and authorized infrastructure runs — all explicitly out of scope here.
+L03 delivers hermetic proof of watchdog-only durable authority, local RPC boundary, arming/invariants, leases/heartbeats, fencing ordering contract (via injected fakes + fail-closed production unavailability), and epoch/safe-mode fail-closed behavior — all as a **library/protocol/authority contract** with no daemon binary or live fencing. It does **not** provide live process-group signaling, create a hostile-root boundary, or close Gate 1. Gate 1 exit requires L04–L08 evidence including live OOB, spare-node chaos matrix, real cgroup-v2 fencing, daemon entrypoint/lifecycle, and authorized infrastructure runs — all explicitly out of scope here.
