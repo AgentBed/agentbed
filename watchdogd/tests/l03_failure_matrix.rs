@@ -1117,9 +1117,9 @@ fn l03_ac06_watchdog_chooses_begin_revert_on_separate_tx() {
 }
 
 #[test]
-fn l03_ac06_unknown_transaction_rejected() {
+fn l03_ac06_payload_tx_mismatch_wrong_binding_at_decode() {
     let bundle = FakeBundle::new();
-    let dir = scratch_dir("l03-unknown-tx");
+    let dir = scratch_dir("l03-payload-tx-mismatch");
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
@@ -1147,14 +1147,14 @@ fn l03_ac06_unknown_transaction_rejected() {
             2,
         ),
     )
-    .expect_err("unknown tx");
-    assert!(matches!(err, RpcError::UnknownTransaction));
+    .expect_err("payload tx mismatch refused at protocol decode");
+    assert!(matches!(err, RpcError::WrongBinding));
 }
 
 #[test]
-fn l03_ac06_stale_epoch_refused_on_same_transaction() {
+fn l03_ac06_payload_epoch_mismatch_wrong_epoch_at_decode() {
     let bundle = FakeBundle::new();
-    let dir = scratch_dir("l03-stale-epoch");
+    let dir = scratch_dir("l03-payload-epoch-mismatch");
     let mut core = open_core(&dir, &bundle);
     let (mut session, established) = bootstrap_session(&mut core, &bundle, "tx1", 1, "lease1", 100);
     let mut counter = 1u64;
@@ -1174,8 +1174,8 @@ fn l03_ac06_stale_epoch_refused_on_same_transaction() {
         counter,
         trigger_decision("req-decide", "tx1", 0),
     )
-    .expect_err("stale");
-    assert!(matches!(err, RpcError::StaleEpoch));
+    .expect_err("payload epoch mismatch refused at protocol decode");
+    assert!(matches!(err, RpcError::WrongEpoch));
     let reader = DecisionLogReader::open(core_config(&dir).store_root.join(DECISION_LOG_REL))
         .expect("reader");
     assert!(!reader.contains_kind(AuthorityRecordKind::BeginCommit));
