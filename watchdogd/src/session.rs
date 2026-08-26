@@ -3,6 +3,7 @@
 use crate::error::RpcError;
 use crate::interfaces::{Entropy, PeerCred, PeerCredSource};
 use crate::rpc::protocol::{SessionBind, SessionEstablished};
+use crate::worker_group_tag::WorkerGroupTag;
 
 #[derive(Debug, Clone)]
 pub struct SessionState {
@@ -18,7 +19,7 @@ pub struct BoundSession {
     pub tx_id: String,
     pub epoch: u64,
     pub lease_id: String,
-    pub process_group: i32,
+    pub worker_group_tag: WorkerGroupTag,
 }
 
 impl SessionState {
@@ -66,7 +67,7 @@ impl SessionState {
             if existing.tx_id != bind.tx_id
                 || existing.epoch != bind.epoch
                 || existing.lease_id != bind.lease_id
-                || existing.process_group != bind.process_group
+                || existing.worker_group_tag != bind.worker_group_tag
                 || existing.host_id != bind.host_id
             {
                 return Err(RpcError::StaleReconnect);
@@ -86,7 +87,7 @@ impl SessionState {
             tx_id: bind.tx_id,
             epoch: bind.epoch,
             lease_id: bind.lease_id,
-            process_group: bind.process_group,
+            worker_group_tag: bind.worker_group_tag,
         };
         let state = Self {
             established: Some(established.clone()),

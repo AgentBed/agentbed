@@ -18,9 +18,7 @@ use agentbed_watchdogd::rpc::protocol::{
     decode_session_bind, encode_frame, encode_request, LocalRequest, SessionBind,
 };
 use agentbed_watchdogd::{CoreConfig, SessionState, WatchdogCore};
-use common::{
-    dependencies_from, scratch_dir, FakeBundle, FenceTraceEvent, DECISION_LOG_REL,
-};
+use common::{dependencies_from, scratch_dir, FakeBundle, FenceTraceEvent, DECISION_LOG_REL};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -46,7 +44,10 @@ fn bootstrap_session(
     epoch: u64,
     lease_id: &str,
     process_group: i32,
-) -> (SessionState, agentbed_watchdogd::rpc::protocol::SessionEstablished) {
+) -> (
+    SessionState,
+    agentbed_watchdogd::rpc::protocol::SessionEstablished,
+) {
     bundle
         .peer_cred
         .enqueue_cred(common::FakePeerCred::broker_cred(0, 0, 4242));
@@ -110,9 +111,9 @@ fn is_malformed_request_refusal(err: &RpcError) -> bool {
 fn assert_worker_group_tag_refused_on_decode(tag: serde_json::Value) {
     let frame = future_session_bind_frame(tag.clone());
     match decode_session_bind(&frame) {
-        Ok(bind) => panic!(
-            "worker_group_tag {tag} must be refused by production decode/bind, got {bind:?}"
-        ),
+        Ok(bind) => {
+            panic!("worker_group_tag {tag} must be refused by production decode/bind, got {bind:?}")
+        }
         Err(RpcError::DenyUnknown) => panic!(
             "worker_group_tag {tag}: DenyUnknown is legacy-shape mismatch, not reserved-tag refusal"
         ),
@@ -140,8 +141,9 @@ fn assert_worker_group_tag_accepted(tag: serde_json::Value) {
     let core_dir = scratch_dir("fencing-seam-wire-accept");
     let bundle = FakeBundle::new();
     let core = open_core(&core_dir, &bundle);
-    decode_and_bind_future_tag(&core, &bundle, tag.clone())
-        .unwrap_or_else(|err| panic!("worker_group_tag {tag} must decode/bind on production, got {err:?}"));
+    decode_and_bind_future_tag(&core, &bundle, tag.clone()).unwrap_or_else(|err| {
+        panic!("worker_group_tag {tag} must decode/bind on production, got {err:?}")
+    });
 }
 
 // --- source absence / trait contract (RED: production still has real signaling) ---
@@ -151,7 +153,7 @@ fn fencing_seam_source_has_no_signal_or_wait_syscalls() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     for entry in fs::read_dir(manifest_dir.join("src")).expect("src dir") {
         let entry = entry.expect("entry");
-        if !entry.path().extension().is_some_and(|ext| ext == "rs") {
+        if entry.path().extension().is_none_or(|ext| ext != "rs") {
             continue;
         }
         let src = fs::read_to_string(entry.path()).expect("read source");

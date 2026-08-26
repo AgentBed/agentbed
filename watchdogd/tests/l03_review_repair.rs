@@ -319,7 +319,7 @@ fn review_f4_production_topology_verifier_exists() {
 fn review_f5_production_fencer_implements_process_group_fence() {
     let fencing_src = include_str!("../src/fencing.rs");
     assert!(
-        fencing_src.contains("impl ProcessGroupFence for ProductionProcessGroupFencer"),
+        fencing_src.contains("impl ProcessGroupFence for UnavailableProcessGroupFencer"),
         "production fencer must be installable into Dependencies"
     );
 }

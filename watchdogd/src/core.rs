@@ -10,6 +10,7 @@ use crate::rpc::protocol::{
     AuthenticatedRequest, LocalRequest, LocalResponse, SessionBind, SessionEstablished,
 };
 use crate::session::{BoundSession, SessionState};
+use crate::worker_group_tag::WorkerGroupTag;
 use std::cell::RefCell;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -39,7 +40,7 @@ struct ArmedState {
     epoch: u64,
     base: String,
     lease_id: String,
-    process_group: i32,
+    worker_group_tag: WorkerGroupTag,
     armed_at: SystemTime,
     deadline: SystemTime,
 }
@@ -212,10 +213,10 @@ impl WatchdogCore {
                 tx_id,
                 epoch,
                 lease_id,
-                process_group,
+                worker_group_tag,
                 ..
             } => {
-                self.handle_lease_renewal(tx_id, *epoch, lease_id, *process_group)?;
+                self.handle_lease_renewal(tx_id, *epoch, lease_id, *worker_group_tag)?;
                 Ok(LocalResponse::LeaseRenewed {
                     request_id: request_id.clone(),
                 })
@@ -225,10 +226,10 @@ impl WatchdogCore {
                 tx_id,
                 epoch,
                 lease_id,
-                process_group,
+                worker_group_tag,
                 ..
             } => {
-                self.handle_lease_renewal(tx_id, *epoch, lease_id, *process_group)?;
+                self.handle_lease_renewal(tx_id, *epoch, lease_id, *worker_group_tag)?;
                 Ok(LocalResponse::HeartbeatAck {
                     request_id: request_id.clone(),
                 })
@@ -305,10 +306,10 @@ impl WatchdogCore {
         if self.armed.is_some() {
             return Err(RpcError::ConflictingRequest);
         }
-        let (lease_id, process_group) = {
+        let (lease_id, worker_group_tag) = {
             let bound = self.durable_binding.borrow();
             let bound = bound.as_ref().ok_or(RpcError::WrongBinding)?;
-            (bound.lease_id.clone(), bound.process_group)
+            (bound.lease_id.clone(), bound.worker_group_tag)
         };
         self.advance_epoch(epoch)?;
         self.append_authority(AuthorityRecordKind::Armed, epoch)?;
@@ -317,7 +318,7 @@ impl WatchdogCore {
             epoch,
             base: base.to_owned(),
             lease_id,
-            process_group,
+            worker_group_tag,
             armed_at: now,
             deadline,
         });
@@ -332,15 +333,15 @@ impl WatchdogCore {
         tx_id: &str,
         epoch: u64,
         lease_id: &str,
-        process_group: i32,
+        worker_group_tag: WorkerGroupTag,
     ) -> Result<(), RpcError> {
-        let (armed_tx, armed_epoch, armed_lease, armed_pg, armed_deadline) = {
+        let (armed_tx, armed_epoch, armed_lease, armed_tag, armed_deadline) = {
             let armed = self.armed.as_ref().ok_or(RpcError::UnknownTransaction)?;
             (
                 armed.tx_id.clone(),
                 armed.epoch,
                 armed.lease_id.clone(),
-                armed.process_group,
+                armed.worker_group_tag,
                 armed.deadline,
             )
         };
@@ -350,7 +351,7 @@ impl WatchdogCore {
         if armed_epoch != epoch {
             return Err(RpcError::StaleEpoch);
         }
-        if armed_lease != lease_id || armed_pg != process_group {
+        if armed_lease != lease_id || armed_tag != worker_group_tag {
             return Err(RpcError::WrongBinding);
         }
         let now = self.deps.clock.now();
@@ -370,7 +371,7 @@ impl WatchdogCore {
         tx_id: &str,
         epoch: u64,
     ) -> Result<LocalResponse, RpcError> {
-        let (armed_tx, armed_epoch, armed_base, armed_deadline, armed_at, process_group) = {
+        let (armed_tx, armed_epoch, armed_base, armed_deadline, armed_at, _worker_group_tag) = {
             let armed = self.armed.as_ref().ok_or(RpcError::UnknownTransaction)?;
             (
                 armed.tx_id.clone(),
@@ -378,7 +379,7 @@ impl WatchdogCore {
                 armed.base.clone(),
                 armed.deadline,
                 armed.armed_at,
-                armed.process_group,
+                armed.worker_group_tag,
             )
         };
         if armed_tx != tx_id {
@@ -401,7 +402,7 @@ impl WatchdogCore {
             .checked_add(LEASE_DURATION)
             .is_some_and(|expiry| now > expiry);
         if lease_expired {
-            self.run_fence(process_group)?;
+            self.run_fence()?;
         }
         if now > armed_deadline {
             return Err(RpcError::ExpiredDeadline);
@@ -422,30 +423,36 @@ impl WatchdogCore {
         })
     }
 
-    fn run_fence(&mut self, pgid: i32) -> Result<(), RpcError> {
-        if let Err(error) = self.do_run_fence(pgid) {
+    fn run_fence(&mut self) -> Result<(), RpcError> {
+        if let Err(error) = self.do_run_fence() {
             let _ = self.enter_safe_mode();
             return Err(error);
         }
         Ok(())
     }
 
-    fn do_run_fence(&self, pgid: i32) -> Result<(), RpcError> {
+    fn do_run_fence(&self) -> Result<(), RpcError> {
         self.deps
             .process_group
-            .signal(SignalKind::Term, pgid)
+            .signal(SignalKind::Term)
             .map_err(|_| RpcError::FenceIncomplete)?;
         self.deps
             .process_group
             .bounded_wait(Duration::from_secs(1))
             .map_err(|_| RpcError::FenceIncomplete)?;
-        let _ = self.deps.process_group.group_alive(FenceStage::AfterTerm);
-        self.deps
-            .process_group
-            .signal(SignalKind::Kill, pgid)
-            .map_err(|_| RpcError::FenceIncomplete)?;
-        if self.deps.process_group.group_alive(FenceStage::AfterKill) {
-            return Err(RpcError::FenceIncomplete);
+        let alive_after_term = self.deps.process_group.group_alive(FenceStage::AfterTerm);
+        if alive_after_term {
+            self.deps
+                .process_group
+                .signal(SignalKind::Kill)
+                .map_err(|_| RpcError::FenceIncomplete)?;
+            self.deps
+                .process_group
+                .bounded_wait(Duration::from_secs(1))
+                .map_err(|_| RpcError::FenceIncomplete)?;
+            if self.deps.process_group.group_alive(FenceStage::AfterKill) {
+                return Err(RpcError::FenceIncomplete);
+            }
         }
         let jobs = self
             .deps

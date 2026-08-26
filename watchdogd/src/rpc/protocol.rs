@@ -3,6 +3,7 @@
 use crate::error::RpcError;
 use crate::read_model::AuthorityRecordKind;
 use crate::session::SessionState;
+use crate::worker_group_tag::{parse_worker_group_tag_value, WorkerGroupTag};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::time::SystemTime;
@@ -11,14 +12,14 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_PAYLOAD_BYTES: usize = 64 * 1024;
 const FRAME_HEADER_BYTES: usize = 8;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionBind {
     pub host_id: String,
     pub tx_id: String,
     pub epoch: u64,
     pub lease_id: String,
-    pub process_group: i32,
+    pub worker_group_tag: WorkerGroupTag,
     pub client_nonce: String,
 }
 
@@ -29,7 +30,7 @@ impl SessionBind {
         tx_id: &str,
         epoch: u64,
         lease_id: &str,
-        process_group: i32,
+        worker_group_tag: i32,
         client_nonce: &str,
     ) -> Self {
         Self {
@@ -37,7 +38,7 @@ impl SessionBind {
             tx_id: tx_id.to_owned(),
             epoch,
             lease_id: lease_id.to_owned(),
-            process_group,
+            worker_group_tag: WorkerGroupTag::from_trusted_i32(worker_group_tag),
             client_nonce: client_nonce.to_owned(),
         }
     }
@@ -92,7 +93,7 @@ pub enum LocalRequest {
         tx_id: String,
         epoch: u64,
         lease_id: String,
-        process_group: i32,
+        worker_group_tag: WorkerGroupTag,
         renewal_seq: u64,
     },
     Heartbeat {
@@ -101,7 +102,7 @@ pub enum LocalRequest {
         tx_id: String,
         epoch: u64,
         lease_id: String,
-        process_group: i32,
+        worker_group_tag: WorkerGroupTag,
         heartbeat_seq: u64,
     },
     RequestDecision {
@@ -159,7 +160,7 @@ impl LocalRequest {
         tx_id: &str,
         epoch: u64,
         lease_id: &str,
-        process_group: i32,
+        worker_group_tag: i32,
         renewal_seq: u64,
     ) -> Self {
         Self::RequestLeaseRenewal {
@@ -168,7 +169,7 @@ impl LocalRequest {
             tx_id: tx_id.to_owned(),
             epoch,
             lease_id: lease_id.to_owned(),
-            process_group,
+            worker_group_tag: WorkerGroupTag::from_trusted_i32(worker_group_tag),
             renewal_seq,
         }
     }
@@ -181,7 +182,7 @@ impl LocalRequest {
         tx_id: &str,
         epoch: u64,
         lease_id: &str,
-        process_group: i32,
+        worker_group_tag: i32,
         heartbeat_seq: u64,
     ) -> Self {
         Self::Heartbeat {
@@ -190,7 +191,7 @@ impl LocalRequest {
             tx_id: tx_id.to_owned(),
             epoch,
             lease_id: lease_id.to_owned(),
-            process_group,
+            worker_group_tag: WorkerGroupTag::from_trusted_i32(worker_group_tag),
             heartbeat_seq,
         }
     }
@@ -345,8 +346,16 @@ pub fn encode_session_bind(bind: &SessionBind) -> Result<Vec<u8>, RpcError> {
 }
 
 pub fn decode_session_bind(frame: &[u8]) -> Result<SessionBind, RpcError> {
-    let envelope: ControlEnvelope<SessionBind> = decode_control(frame)?;
-    Ok(envelope.payload)
+    let envelope: ControlEnvelope<SessionBindWire> = decode_control(frame)?;
+    let tag = parse_worker_group_tag_value(&envelope.payload.worker_group_tag)?;
+    Ok(SessionBind {
+        host_id: envelope.payload.host_id,
+        tx_id: envelope.payload.tx_id,
+        epoch: envelope.payload.epoch,
+        lease_id: envelope.payload.lease_id,
+        worker_group_tag: tag,
+        client_nonce: envelope.payload.client_nonce,
+    })
 }
 
 pub fn encode_session_established(established: &SessionEstablished) -> Result<Vec<u8>, RpcError> {
@@ -521,9 +530,23 @@ fn reject_unknown_top_level(value: &serde_json::Value, allowed: &[&str]) -> Resu
     Ok(())
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionBindWire {
+    host_id: String,
+    tx_id: String,
+    epoch: u64,
+    lease_id: String,
+    worker_group_tag: serde_json::Value,
+    client_nonce: String,
+}
+
 fn classify_json_error(error: &serde_json::Error) -> RpcError {
-    if error.to_string().contains("unknown field") {
+    let message = error.to_string();
+    if message.contains("unknown field") {
         RpcError::DenyUnknown
+    } else if message.contains("MalformedRequest") {
+        RpcError::MalformedRequest
     } else {
         RpcError::MalformedFrame
     }

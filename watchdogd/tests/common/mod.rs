@@ -24,7 +24,7 @@ pub fn scratch_dir(prefix: &str) -> PathBuf {
 
 pub fn truncate_file(path: &Path, len: usize) {
     let data = std::fs::read(path).expect("read");
-    std::fs::write(path, &data[..len.min(data.len())]).expect("truncate");
+    std::fs::write(path, data.get(..len.min(data.len())).unwrap_or(&[])).expect("truncate");
 }
 
 /// Extract UTF-8 JSON payload bytes from a production-encoded frame.
@@ -64,6 +64,8 @@ pub fn reframe_with_unknown_protocol_version(frame: &[u8], version: u32) -> Vec<
 pub fn frame_with_oversize_length_header(valid_frame: &[u8], max_payload: usize) -> Vec<u8> {
     let mut bad = valid_frame.to_vec();
     let oversize = (max_payload as u32).saturating_add(1);
-    bad[..4].copy_from_slice(&oversize.to_be_bytes());
+    if let Some(header) = bad.get_mut(..4) {
+        header.copy_from_slice(&oversize.to_be_bytes());
+    }
     bad
 }

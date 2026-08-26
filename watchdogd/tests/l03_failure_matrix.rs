@@ -1256,6 +1256,7 @@ fn l03_ac08_expired_lease_fence_order_before_begin_revert() {
             FenceTraceEvent::BoundedWait,
             FenceTraceEvent::AliveAfterTerm,
             FenceTraceEvent::Kill,
+            FenceTraceEvent::BoundedWait,
             FenceTraceEvent::ConfirmedExit,
             FenceTraceEvent::ZeroCandidateJobs,
         ]

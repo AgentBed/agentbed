@@ -48,7 +48,7 @@ pub trait Durability: std::fmt::Debug + Send + Sync {
 }
 
 pub trait ProcessGroupFence: std::fmt::Debug + Send + Sync {
-    fn signal(&self, kind: SignalKind, pgid: i32) -> Result<(), FenceError>;
+    fn signal(&self, kind: SignalKind) -> Result<(), FenceError>;
     fn group_alive(&self, stage: FenceStage) -> bool;
     fn bounded_wait(&self, timeout: Duration) -> Result<(), FenceError>;
 }

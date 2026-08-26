@@ -44,6 +44,7 @@ pub enum FenceError {
     SignalFailed,
     Incomplete,
     WaitFailed,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +90,7 @@ pub enum RpcError {
     WrongBinding,
     ClockRegression,
     FenceIncomplete,
+    MalformedRequest,
     Transport(String),
 }
 

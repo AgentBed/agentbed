@@ -179,7 +179,7 @@ impl FakeProcessGroup {
 }
 
 impl ProcessGroupFence for FakeProcessGroup {
-    fn signal(&self, kind: SignalKind, _pgid: i32) -> Result<(), FenceError> {
+    fn signal(&self, kind: SignalKind) -> Result<(), FenceError> {
         let event = match kind {
             SignalKind::Term => FenceTraceEvent::Term,
             SignalKind::Kill => FenceTraceEvent::Kill,
