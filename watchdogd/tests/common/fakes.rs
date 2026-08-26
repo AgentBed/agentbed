@@ -104,12 +104,29 @@ pub enum DurabilityOp {
 #[derive(Debug, Default)]
 pub struct FakeDurability {
     pub ops: Mutex<Vec<DurabilityOp>>,
+    pub file_fsync_paths: Mutex<Vec<PathBuf>>,
+    pub dir_fsync_paths: Mutex<Vec<PathBuf>>,
+    pub rename_ops: Mutex<Vec<(PathBuf, PathBuf)>>,
     fail_matching: Mutex<VecDeque<DurabilityOp>>,
+    fail_file_fsync_at: Mutex<Option<usize>>,
+    fail_dir_fsync_at: Mutex<Option<usize>>,
+    file_fsync_invocations: Mutex<usize>,
+    dir_fsync_invocations: Mutex<usize>,
 }
 
 impl FakeDurability {
     pub fn fail_on(&self, op: DurabilityOp) {
         self.fail_matching.lock().expect("lock").push_back(op);
+    }
+
+    /// Fail on the Nth `file_fsync` call (1-based).
+    pub fn fail_on_file_fsync_invocation(&self, n: usize) {
+        *self.fail_file_fsync_at.lock().expect("lock") = Some(n);
+    }
+
+    /// Fail on the Nth `dir_fsync` call (1-based).
+    pub fn fail_on_dir_fsync_invocation(&self, n: usize) {
+        *self.fail_dir_fsync_at.lock().expect("lock") = Some(n);
     }
 
     fn maybe_fail(&self, op: DurabilityOp) -> Result<(), DurabilityError> {
@@ -123,21 +140,43 @@ impl FakeDurability {
 }
 
 impl Durability for FakeDurability {
-    fn file_fsync(&self, _path: &Path) -> Result<(), DurabilityError> {
+    fn file_fsync(&self, path: &Path) -> Result<(), DurabilityError> {
         self.ops.lock().expect("lock").push(DurabilityOp::FileFsync);
+        self.file_fsync_paths
+            .lock()
+            .expect("lock")
+            .push(path.to_path_buf());
+        let mut count = self.file_fsync_invocations.lock().expect("lock");
+        *count += 1;
+        if *self.fail_file_fsync_at.lock().expect("lock") == Some(*count) {
+            return Err(DurabilityError::InjectedFailure);
+        }
         self.maybe_fail(DurabilityOp::FileFsync)
     }
 
-    fn dir_fsync(&self, _path: &Path) -> Result<(), DurabilityError> {
+    fn dir_fsync(&self, path: &Path) -> Result<(), DurabilityError> {
         self.ops.lock().expect("lock").push(DurabilityOp::DirFsync);
+        self.dir_fsync_paths
+            .lock()
+            .expect("lock")
+            .push(path.to_path_buf());
+        let mut count = self.dir_fsync_invocations.lock().expect("lock");
+        *count += 1;
+        if *self.fail_dir_fsync_at.lock().expect("lock") == Some(*count) {
+            return Err(DurabilityError::InjectedFailure);
+        }
         self.maybe_fail(DurabilityOp::DirFsync)
     }
 
-    fn atomic_rename(&self, _from: &Path, _to: &Path) -> Result<(), DurabilityError> {
+    fn atomic_rename(&self, from: &Path, to: &Path) -> Result<(), DurabilityError> {
         self.ops
             .lock()
             .expect("lock")
             .push(DurabilityOp::AtomicRename);
+        self.rename_ops
+            .lock()
+            .expect("lock")
+            .push((from.to_path_buf(), to.to_path_buf()));
         self.maybe_fail(DurabilityOp::AtomicRename)
     }
 

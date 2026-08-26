@@ -1,0 +1,41 @@
+AGB-8 bounded closure scenario round-2 REVIEW RED evidence
+Parent head: 7c4e2b76f9ec68d910de650ebd73c31b1b084e8b
+Scenario verdict: 0f82aaec-9afd-4e30-82e8-c9cb0f56346c (NEEDS_FIXES G1–G3)
+
+Command (bare, unpiped):
+  cargo test -p agentbed-watchdogd --test l03_scenario_round2
+
+Exit code: 101
+Summary: 2 passed; 10 failed; 12 total
+
+Causal failures by blocker:
+
+G1 topology (4 failed, 0 passed):
+  g1_production_topology_rejects_ordinary_mode_0700_directory
+    - expected Err(OrdinaryDirectoryFallback), got Ok(())
+  g1_production_topology_rejects_symlink_component_path
+    - expected Err(SymlinkComponent), got Ok(())
+  g1_production_topology_rejects_intermediate_symlink_component
+    - expected Err(SymlinkComponent), got Ok(())
+  g1_production_topology_source_contract_requires_substantive_evidence
+    - topology.rs lacks mount/device/ownership/link-count/protected-domain/durability probes
+
+G2 safe-mode latch (3 failed, 1 passed):
+  g2_authority_append_fsync_failure_latches_safe_mode
+    - first: Durability(InjectedFailure); second arm succeeded (Armed) instead of SafeModeActive
+  g2_epoch_temp_file_fsync_failure_latches_safe_mode
+    - first: Durability(InjectedFailure); second arm succeeded (Armed) instead of SafeModeActive
+  g2_epoch_parent_dir_fsync_failure_latches_safe_mode
+    - first: Durability(InjectedFailure); second arm succeeded (Armed) instead of SafeModeActive
+  g2_safe_mode_marker_persist_failure_keeps_in_memory_latch — PASS (enter_safe_mode path already latches)
+
+G3 same-directory / ambiguous temp (3 failed, 1 passed):
+  g3_epoch_temp_parent_matches_high_water_parent_and_dir_fsynced
+    - temp parent store_root != epoch/high-water.json parent store_root/epoch
+  g3_safe_mode_temp_parent_matches_marker_parent_and_dir_fsynced
+    - temp parent store_root != state/safe-mode.json parent store_root/state
+  g3_stale_unique_epoch_temp_in_target_dir_latches_safe_mode
+    - arm succeeded (Armed) with stale epoch/.tmp-epoch-* present
+  g3_legacy_epoch_temp_refusal_preserved — PASS (legacy .tmp-epoch still refused)
+
+Production, PLAN, and existing RESULT/evidence untouched at this RED commit.
