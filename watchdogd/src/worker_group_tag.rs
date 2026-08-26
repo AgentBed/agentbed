@@ -19,13 +19,6 @@ impl WorkerGroupTag {
     pub fn raw(self) -> u32 {
         self.0
     }
-
-    /// Constructor helper for trusted in-crate/test call sites with known-valid tags.
-    #[must_use]
-    #[allow(clippy::expect_used, clippy::cast_sign_loss)]
-    pub fn from_trusted_i32(value: i32) -> Self {
-        Self::try_from_raw(value as u32).expect("trusted worker_group_tag")
-    }
 }
 
 impl Serialize for WorkerGroupTag {

@@ -11,6 +11,7 @@ use agentbed_protocol::digest::Digest;
 use agentbed_protocol::dto::transaction::{BaseRevision, TransactionState};
 use agentbed_protocol::wire::{ConfigFileChange, ConfigProposeParams, EffectClass, IdempotencyKey};
 use agentbed_watchdogd::rpc::protocol::{LocalRequest, SessionBind, SessionEstablished};
+use agentbed_watchdogd::WorkerGroupTag;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -20,6 +21,10 @@ const CLIENT_SRC: &str = include_str!(concat!(
 ));
 
 const TX: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+fn fixture_worker_group_tag() -> WorkerGroupTag {
+    WorkerGroupTag::try_from_raw(100).expect("valid broker test fixture tag")
+}
 
 fn scratch() -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -118,7 +123,14 @@ fn l03_ac04_client_source_excludes_forbidden_request_kinds() {
 #[test]
 fn l03_ac04_client_bootstrap_before_authority_requests() {
     let client = WatchdogClient::new("/tmp/agentbed-watchdog-test.sock");
-    let bind = SessionBind::new("host-test", TX, 1, "lease1", 100, "client-nonce");
+    let bind = SessionBind::new(
+        "host-test",
+        TX,
+        1,
+        "lease1",
+        fixture_worker_group_tag(),
+        "client-nonce",
+    );
     let err = client.bootstrap_session(&bind).expect_err("no server");
     assert!(matches!(
         err,
@@ -148,7 +160,14 @@ fn l03_ac04_client_encodes_authenticated_arm_via_established_session() {
 #[test]
 fn l03_ac04_client_propagates_fail_closed_transport_errors() {
     let client = WatchdogClient::new("/tmp/agentbed-watchdog-missing.sock");
-    let bind = SessionBind::new("host-test", TX, 1, "lease1", 100, "client-nonce");
+    let bind = SessionBind::new(
+        "host-test",
+        TX,
+        1,
+        "lease1",
+        fixture_worker_group_tag(),
+        "client-nonce",
+    );
     let err = client.bootstrap_session(&bind).expect_err("missing socket");
     assert!(matches!(
         err,

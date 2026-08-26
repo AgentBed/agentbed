@@ -26,8 +26,9 @@ use agentbed_watchdogd::rpc::server::RpcServer;
 use agentbed_watchdogd::{CoreConfig, SessionState, WatchdogCore};
 use common::{
     dependencies_from, frame_with_oversize_length_header, reframe_with_unknown_json_field,
-    reframe_with_unknown_protocol_version, scratch_dir, truncate_file, FakeBundle, FakePeerCred,
-    FenceTraceEvent, DECISION_LOG_REL, EPOCH_HIGH_WATER_REL, SAFE_MODE_REL, WATCHDOG_MOUNT_ROOT,
+    reframe_with_unknown_protocol_version, scratch_dir, truncate_file, valid_worker_group_tag,
+    FakeBundle, FakePeerCred, FenceTraceEvent, DECISION_LOG_REL, EPOCH_HIGH_WATER_REL,
+    SAFE_MODE_REL, WATCHDOG_MOUNT_ROOT,
 };
 use std::fs;
 use std::io::Write;
@@ -52,13 +53,13 @@ fn open_core(dir: &Path, bundle: &FakeBundle) -> WatchdogCore {
     WatchdogCore::open(core_config(dir), deps).expect("open core")
 }
 
-fn session_bind(tx: &str, epoch: u64, lease_id: &str, process_group: i32) -> SessionBind {
+fn session_bind(tx: &str, epoch: u64, lease_id: &str, worker_group_tag: u32) -> SessionBind {
     SessionBind::new(
         "host-test",
         tx,
         epoch,
         lease_id,
-        process_group,
+        valid_worker_group_tag(worker_group_tag),
         "client-nonce-1",
     )
 }
@@ -69,12 +70,12 @@ fn bootstrap_session(
     tx: &str,
     epoch: u64,
     lease_id: &str,
-    process_group: i32,
+    worker_group_tag: u32,
 ) -> (SessionState, SessionEstablished) {
     bundle
         .peer_cred
         .enqueue_cred(FakePeerCred::broker_cred(0, 0, 4242));
-    let bind = session_bind(tx, epoch, lease_id, process_group);
+    let bind = session_bind(tx, epoch, lease_id, worker_group_tag);
     SessionState::bind(core, &bundle.peer_cred, &bundle.entropy, bind).expect("bootstrap")
 }
 
@@ -599,14 +600,30 @@ fn l03_ac04_request_kinds_round_trip_through_codec() {
         &mut session,
         &established,
         counter,
-        LocalRequest::request_lease_renewal("req-renew", "host-test", "tx1", 1, "lease1", 100, 2),
+        LocalRequest::request_lease_renewal(
+            "req-renew",
+            "host-test",
+            "tx1",
+            1,
+            "lease1",
+            valid_worker_group_tag(100),
+            2,
+        ),
     );
     counter += 1;
     assert_request_round_trip(
         &mut session,
         &established,
         counter,
-        LocalRequest::heartbeat("req-hb", "host-test", "tx1", 1, "lease1", 100, 3),
+        LocalRequest::heartbeat(
+            "req-hb",
+            "host-test",
+            "tx1",
+            1,
+            "lease1",
+            valid_worker_group_tag(100),
+            3,
+        ),
     );
     counter += 1;
     assert_request_round_trip(
@@ -667,7 +684,15 @@ fn l03_ac04_replay_counter_rejected_after_arm() {
     )
     .expect("arm");
     counter += 1;
-    let hb = LocalRequest::heartbeat("req-hb-1", "host-test", "tx1", 1, "lease1", 100, 1);
+    let hb = LocalRequest::heartbeat(
+        "req-hb-1",
+        "host-test",
+        "tx1",
+        1,
+        "lease1",
+        valid_worker_group_tag(100),
+        1,
+    );
     let frame = encode_authenticated_frame(&hb, &established, counter).expect("encode");
     let verified = decode_request(&frame, &mut session).expect("decode");
     core.handle_request(verified, &mut session).expect("first");
@@ -1110,7 +1135,15 @@ fn l03_ac06_unknown_transaction_rejected() {
         &mut session,
         &established,
         counter,
-        LocalRequest::heartbeat("req-hb", "host-test", "tx-unknown", 1, "lease1", 100, 2),
+        LocalRequest::heartbeat(
+            "req-hb",
+            "host-test",
+            "tx-unknown",
+            1,
+            "lease1",
+            valid_worker_group_tag(100),
+            2,
+        ),
     )
     .expect_err("unknown tx");
     assert!(matches!(err, RpcError::UnknownTransaction));
@@ -1170,7 +1203,15 @@ fn l03_ac07_heartbeat_wrong_binding_rejected() {
         &mut session,
         &established,
         counter,
-        LocalRequest::heartbeat("req-hb", "host-test", "tx1", 1, "wrong-lease", 100, 2),
+        LocalRequest::heartbeat(
+            "req-hb",
+            "host-test",
+            "tx1",
+            1,
+            "wrong-lease",
+            valid_worker_group_tag(100),
+            2,
+        ),
     )
     .expect_err("binding");
     assert!(matches!(err, RpcError::WrongBinding));
@@ -1199,7 +1240,15 @@ fn l03_ac07_clock_regression_rejected() {
         &mut session,
         &established,
         counter,
-        LocalRequest::request_lease_renewal("req-renew", "host-test", "tx1", 1, "lease1", 100, 3),
+        LocalRequest::request_lease_renewal(
+            "req-renew",
+            "host-test",
+            "tx1",
+            1,
+            "lease1",
+            valid_worker_group_tag(100),
+            3,
+        ),
     )
     .expect_err("clock");
     assert!(matches!(err, RpcError::ClockRegression));

@@ -8,6 +8,12 @@ pub use fakes::*;
 pub use fence_trace::FenceTraceEvent;
 pub use paths::*;
 
+use agentbed_watchdogd::WorkerGroupTag;
+
+pub fn valid_worker_group_tag(raw: u32) -> WorkerGroupTag {
+    WorkerGroupTag::try_from_raw(raw).expect("valid test fixture worker_group_tag")
+}
+
 use std::path::{Path, PathBuf};
 
 pub fn scratch_dir(prefix: &str) -> PathBuf {

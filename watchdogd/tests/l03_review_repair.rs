@@ -21,8 +21,8 @@ use agentbed_watchdogd::rpc::protocol::{
 };
 use agentbed_watchdogd::{CoreConfig, SessionState, WatchdogCore};
 use common::{
-    dependencies_from, scratch_dir, DurabilityOp, FakeBundle, FakePeerCred, DECISION_LOG_REL,
-    EPOCH_HIGH_WATER_REL, SAFE_MODE_REL,
+    dependencies_from, scratch_dir, valid_worker_group_tag, DurabilityOp, FakeBundle, FakePeerCred,
+    DECISION_LOG_REL, EPOCH_HIGH_WATER_REL, SAFE_MODE_REL,
 };
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -49,7 +49,7 @@ fn bootstrap_session(
     tx: &str,
     epoch: u64,
     lease_id: &str,
-    process_group: i32,
+    worker_group_tag: u32,
 ) -> (
     SessionState,
     agentbed_watchdogd::rpc::protocol::SessionEstablished,
@@ -62,7 +62,7 @@ fn bootstrap_session(
         tx,
         epoch,
         lease_id,
-        process_group,
+        valid_worker_group_tag(worker_group_tag),
         "client-nonce-1",
     );
     SessionState::bind(core, &bundle.peer_cred, &bundle.entropy, bind).expect("bootstrap")
@@ -483,7 +483,7 @@ fn review_f15_late_lease_renewal_rejected() {
             "tx-renew",
             1,
             "lease1",
-            100,
+            valid_worker_group_tag(100),
             1,
         ),
     )

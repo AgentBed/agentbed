@@ -19,9 +19,13 @@
 | Review GREEN (production repair) | `b79ba1bec7d0b2b257a211f6470825b47d21a347` | production fixes for scenario findings F1–F11, F14, F15 |
 | PLAN (fencing-safety ratification) | `83821e57aefbddd039d3c31b169a01285909ec12` | amended `plans/AGB-8/PLAN.md` (L-P decision `6179e45d`) |
 | RED (fencing-safety) | `5b5d20798eee2eddd5f9e3110365dbd9945419c8` | `plans/AGB-8/fencing-safety-red-evidence.txt` + `watchdogd/tests/fencing_seam.rs`; `fencing_fixture.rs` deleted |
-| GREEN (fencing-safety) | *(this head)* | `WorkerGroupTag`, `UnavailableProcessGroupFencer`, sealed 9-step fence ordering; no real signaling |
+| GREEN (fencing-safety) | `02267647dc784a7ef96ca5eb4f65b26c39a2c162` | `WorkerGroupTag`, `UnavailableProcessGroupFencer`, sealed 9-step fence ordering; no real signaling |
+| RED (constructor safety) | `dffd5bdbdece9c9a9e1a7753e76623a2c50b2e33` | `plans/AGB-8/fencing-constructor-red-evidence.txt` + additive `fencing_seam.rs` tests |
+| GREEN (constructor safety) | *(this head)* | removed `from_trusted_i32`; public constructors consume `WorkerGroupTag` only |
 
-Accepted initial RED tests/fixtures/evidence remain byte-identical to `58ec7da` except superseded fencing paths. Accepted fencing-safety RED oracle semantics preserved; `fencing_seam.rs` differs from `5b5d207` only by `rustfmt` and one clippy-neutral `is_none_or` guard (no assertion/oracle weakening).
+Accepted initial RED tests/fixtures/evidence remain byte-identical to `58ec7da` except superseded fencing paths. Fencing-safety RED oracle semantics preserved through `5b5d207`. Constructor-safety RED at `dffd5bdb` adds two additive `fencing_seam` tests (10 total); all pass after constructor GREEN.
+
+**Constructor-safety repair:** removed `WorkerGroupTag::from_trusted_i32` and all production `.expect("trusted worker_group_tag")` paths. `SessionBind::new`, `LocalRequest::request_lease_renewal`, and `LocalRequest::heartbeat` now require a validated `WorkerGroupTag`; test/broker call sites use `try_from_raw` via `valid_worker_group_tag` fixture helper.
 
 ## Critical fencing incident — root cause and safe design
 
@@ -88,19 +92,18 @@ Production paths:
 ## Verification commands (bare, unpiped, final head)
 
 ```text
-cargo test -p agentbed-watchdogd --test fencing_seam              PASS (exit 0, 8/8)
+cargo test -p agentbed-watchdogd --test fencing_seam              PASS (exit 0, 10/10)
 cargo test -p agentbed-watchdogd --test l03_failure_matrix      PASS (exit 0, 54/54)
 cargo test -p agentbed-watchdogd --test l03_review_repair       PASS (exit 0, 19/19)
+cargo test -p agentbed-broker --test l03_watchdog_client        PASS (exit 0, 9/9)
 cargo fmt --all -- --check                                      PASS (exit 0)
 cargo clippy --workspace --all-targets -- -D warnings             PASS (exit 0)
 cargo build --workspace --all-targets                             PASS (exit 0)
 cargo test --workspace                                          PASS (exit 0)
-cargo test -p agentbed-broker --test l03_watchdog_client        PASS (exit 0, 9/9)
-cargo test -p agentbed-adapter-nix --test l03_protected_broker_state PASS (exit 0, 6/6)
 git diff --check 01a4bf8c8de2a5cb4544bf74af9bb819c29adf1c..HEAD PASS (exit 0)
 ```
 
-Source safety (read-only): `watchdogd/tests/fencing_fixture.rs` absent; no `libc::kill`/`waitpid`/`killpg`/`sigqueue` in `watchdogd/src/**`.
+Source safety (read-only): `watchdogd/tests/fencing_fixture.rs` absent; no `libc::kill`/`waitpid`/`killpg`/`sigqueue` in `watchdogd/src/**`; no `from_trusted_i32`, no `trusted worker_group_tag` expect, no `worker_group_tag: i32` in production `watchdogd/src/**`.
 
 ## Hard non-goals held (L03-AC12)
 

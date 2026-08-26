@@ -18,7 +18,10 @@ use agentbed_watchdogd::rpc::protocol::{
     decode_session_bind, encode_frame, encode_request, LocalRequest, SessionBind,
 };
 use agentbed_watchdogd::{CoreConfig, SessionState, WatchdogCore};
-use common::{dependencies_from, scratch_dir, FakeBundle, FenceTraceEvent, DECISION_LOG_REL};
+use common::{
+    dependencies_from, scratch_dir, valid_worker_group_tag, FakeBundle, FenceTraceEvent,
+    DECISION_LOG_REL,
+};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -43,7 +46,7 @@ fn bootstrap_session(
     tx: &str,
     epoch: u64,
     lease_id: &str,
-    process_group: i32,
+    worker_group_tag: u32,
 ) -> (
     SessionState,
     agentbed_watchdogd::rpc::protocol::SessionEstablished,
@@ -56,7 +59,7 @@ fn bootstrap_session(
         tx,
         epoch,
         lease_id,
-        process_group,
+        valid_worker_group_tag(worker_group_tag),
         "client-nonce-seam",
     );
     SessionState::bind(core, &bundle.peer_cred, &bundle.entropy, bind).expect("bootstrap")

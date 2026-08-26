@@ -30,7 +30,7 @@ impl SessionBind {
         tx_id: &str,
         epoch: u64,
         lease_id: &str,
-        worker_group_tag: i32,
+        worker_group_tag: WorkerGroupTag,
         client_nonce: &str,
     ) -> Self {
         Self {
@@ -38,7 +38,7 @@ impl SessionBind {
             tx_id: tx_id.to_owned(),
             epoch,
             lease_id: lease_id.to_owned(),
-            worker_group_tag: WorkerGroupTag::from_trusted_i32(worker_group_tag),
+            worker_group_tag,
             client_nonce: client_nonce.to_owned(),
         }
     }
@@ -160,7 +160,7 @@ impl LocalRequest {
         tx_id: &str,
         epoch: u64,
         lease_id: &str,
-        worker_group_tag: i32,
+        worker_group_tag: WorkerGroupTag,
         renewal_seq: u64,
     ) -> Self {
         Self::RequestLeaseRenewal {
@@ -169,7 +169,7 @@ impl LocalRequest {
             tx_id: tx_id.to_owned(),
             epoch,
             lease_id: lease_id.to_owned(),
-            worker_group_tag: WorkerGroupTag::from_trusted_i32(worker_group_tag),
+            worker_group_tag,
             renewal_seq,
         }
     }
@@ -182,7 +182,7 @@ impl LocalRequest {
         tx_id: &str,
         epoch: u64,
         lease_id: &str,
-        worker_group_tag: i32,
+        worker_group_tag: WorkerGroupTag,
         heartbeat_seq: u64,
     ) -> Self {
         Self::Heartbeat {
@@ -191,7 +191,7 @@ impl LocalRequest {
             tx_id: tx_id.to_owned(),
             epoch,
             lease_id: lease_id.to_owned(),
-            worker_group_tag: WorkerGroupTag::from_trusted_i32(worker_group_tag),
+            worker_group_tag,
             heartbeat_seq,
         }
     }
