@@ -27,6 +27,9 @@ pub fn persist_safe_mode_marker(
     durability.file_fsync(&tmp).map_err(RpcError::Durability)?;
     durable_atomic_rename(durability, &tmp, &marker).map_err(|_| RpcError::SafeModeActive)?;
     durability.dir_fsync(parent).map_err(RpcError::Durability)?;
+    durability
+        .readback_verify(&marker, SAFE_MODE_PAYLOAD)
+        .map_err(RpcError::Durability)?;
     Ok(())
 }
 

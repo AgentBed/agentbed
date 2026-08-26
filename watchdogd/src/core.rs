@@ -508,13 +508,13 @@ impl WatchdogCore {
             self.enter_safe_mode()?;
             return Err(RpcError::SafeModeActive);
         }
-        if self.deps.durability.readback_verify(&path, &bytes).is_err() {
-            self.enter_safe_mode()?;
-            return Err(RpcError::SafeModeActive);
-        }
         if let Err(error) = self.deps.durability.dir_fsync(parent) {
             self.latch_safe_mode_best_effort();
             return Err(RpcError::Durability(error));
+        }
+        if self.deps.durability.readback_verify(&path, &bytes).is_err() {
+            self.enter_safe_mode()?;
+            return Err(RpcError::SafeModeActive);
         }
         Ok(())
     }
