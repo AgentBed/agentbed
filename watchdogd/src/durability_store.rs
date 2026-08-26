@@ -63,14 +63,17 @@ pub fn ambiguous_safe_mode_temp_residue(parent: &Path) -> bool {
 
 fn ambiguous_temp_residue(parent: &Path, prefix: &str) -> bool {
     let Ok(entries) = fs::read_dir(parent) else {
-        return false;
+        return true;
     };
-    entries.filter_map(Result::ok).any(|entry| {
-        entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with(prefix))
-    })
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return true;
+        };
+        if entry.file_name().to_string_lossy().starts_with(prefix) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(unix)]
