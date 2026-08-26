@@ -103,11 +103,8 @@ fn future_session_bind_frame(worker_group_tag: serde_json::Value) -> Vec<u8> {
     encode_frame(&payload).expect("frame")
 }
 
-fn is_reserved_tag_refusal(err: &RpcError) -> bool {
-    matches!(
-        err,
-        RpcError::MalformedFrame | RpcError::WrongBinding | RpcError::StaleReconnect
-    )
+fn is_malformed_request_refusal(err: &RpcError) -> bool {
+    format!("{err:?}") == "MalformedRequest"
 }
 
 fn assert_worker_group_tag_refused_on_decode(tag: serde_json::Value) {
@@ -120,8 +117,8 @@ fn assert_worker_group_tag_refused_on_decode(tag: serde_json::Value) {
             "worker_group_tag {tag}: DenyUnknown is legacy-shape mismatch, not reserved-tag refusal"
         ),
         Err(err) => assert!(
-            is_reserved_tag_refusal(&err),
-            "worker_group_tag {tag}: uniform reserved-tag refusal expected, got {err:?}"
+            is_malformed_request_refusal(&err),
+            "worker_group_tag {tag}: uniform MalformedRequest required, got {err:?}"
         ),
     }
 }
