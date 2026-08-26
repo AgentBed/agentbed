@@ -4,7 +4,7 @@ use crate::core::WATCHDOG_MOUNT_ROOT;
 use crate::error::TopologyError;
 use crate::interfaces::TopologyProbe;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -234,14 +234,31 @@ fn parse_mountinfo_line(line: &str) -> Result<MountEntry, TopologyError> {
         .parse()
         .map_err(|_| TopologyError::UnavailableStore)?;
     fields.next().ok_or(TopologyError::UnavailableStore)?;
-    fields.next().ok_or(TopologyError::UnavailableStore)?;
+    let major_minor = fields.next().ok_or(TopologyError::UnavailableStore)?;
+    parse_major_minor(major_minor)?;
     fields.next().ok_or(TopologyError::UnavailableStore)?;
     let mount_point_raw = fields.next().ok_or(TopologyError::UnavailableStore)?;
     let mount_point = unescape_mount_path(mount_point_raw)?;
+    if !mount_point.starts_with('/') {
+        return Err(TopologyError::UnavailableStore);
+    }
     Ok(MountEntry {
         mount_id,
         mount_point,
     })
+}
+
+fn parse_major_minor(token: &str) -> Result<(), TopologyError> {
+    let (major, minor) = token
+        .split_once(':')
+        .ok_or(TopologyError::UnavailableStore)?;
+    major
+        .parse::<u32>()
+        .map_err(|_| TopologyError::UnavailableStore)?;
+    minor
+        .parse::<u32>()
+        .map_err(|_| TopologyError::UnavailableStore)?;
+    Ok(())
 }
 
 fn unescape_mount_path(raw: &str) -> Result<String, TopologyError> {
@@ -250,11 +267,17 @@ fn unescape_mount_path(raw: &str) -> Result<String, TopologyError> {
     let mut idx = 0;
     while let Some(&byte) = bytes.get(idx) {
         if byte == b'\\' {
-            let h = bytes.get(idx + 1).ok_or(TopologyError::UnavailableStore)?;
-            let t = bytes.get(idx + 2).ok_or(TopologyError::UnavailableStore)?;
-            let o = bytes.get(idx + 3).ok_or(TopologyError::UnavailableStore)?;
-            let value = (hex_digit(*h)? << 6) | (hex_digit(*t)? << 3) | hex_digit(*o)?;
-            out.push(char::from(value));
+            let seq = bytes
+                .get(idx..idx + 4)
+                .ok_or(TopologyError::UnavailableStore)?;
+            let decoded = match seq {
+                b"\\040" => ' ',
+                b"\\011" => '\t',
+                b"\\012" => '\n',
+                b"\\134" => '\\',
+                _ => return Err(TopologyError::UnavailableStore),
+            };
+            out.push(decoded);
             idx += 4;
             continue;
         }
@@ -262,13 +285,6 @@ fn unescape_mount_path(raw: &str) -> Result<String, TopologyError> {
         idx += 1;
     }
     Ok(out)
-}
-
-fn hex_digit(byte: u8) -> Result<u8, TopologyError> {
-    match byte {
-        b'0'..=b'7' => Ok(byte - b'0'),
-        _ => Err(TopologyError::UnavailableStore),
-    }
 }
 
 fn find_exact_mount_unique<'a>(
@@ -438,27 +454,33 @@ fn evaluate_file_ownership(
 #[cfg(unix)]
 fn inspect_existing_layout(store_root: &Path) -> Result<(), TopologyError> {
     for subdir in WATCHDOG_SUBDIRS {
-        let path = store_root.join(subdir);
-        if path.exists() {
-            let meta = fs::symlink_metadata(&path).map_err(|_| TopologyError::UnavailableStore)?;
-            evaluate_root_dir_metadata(&meta, STORE_DIR_MODE)?;
-        }
+        inspect_optional_dir(&store_root.join(subdir), STORE_DIR_MODE)?;
     }
     for (rel, mode) in WATCHDOG_AUTHORITATIVE_FILES {
-        let path = store_root.join(rel);
-        if path.exists() {
-            let meta = fs::symlink_metadata(&path).map_err(|_| TopologyError::UnavailableStore)?;
-            evaluate_regular_file_metadata(&meta, *mode)?;
-        }
+        inspect_optional_file(&store_root.join(rel), *mode)?;
     }
     for (rel, mode) in WATCHDOG_OPTIONAL_FILES {
-        let path = store_root.join(rel);
-        if path.exists() {
-            let meta = fs::symlink_metadata(&path).map_err(|_| TopologyError::UnavailableStore)?;
-            evaluate_regular_file_metadata(&meta, *mode)?;
-        }
+        inspect_optional_file(&store_root.join(rel), *mode)?;
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn inspect_optional_dir(path: &Path, expected_mode: u32) -> Result<(), TopologyError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => evaluate_root_dir_metadata(&meta, expected_mode),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(TopologyError::UnavailableStore),
+    }
+}
+
+#[cfg(unix)]
+fn inspect_optional_file(path: &Path, expected_mode: u32) -> Result<(), TopologyError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => evaluate_regular_file_metadata(&meta, expected_mode),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(TopologyError::UnavailableStore),
+    }
 }
 
 #[cfg(unix)]
@@ -500,7 +522,11 @@ fn prove_writable_same_directory_atomic(store_root: &Path) -> Result<(), Topolog
 #[cfg(unix)]
 fn cleanup_probe_residue(parent: &Path, paths: &[PathBuf]) -> Result<(), TopologyError> {
     for path in paths {
-        let _ = fs::remove_file(path);
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => return Err(TopologyError::Unwritable),
+        }
     }
     dir_fsync(parent)
 }
@@ -577,9 +603,33 @@ mod tests {
     }
 
     #[test]
-    fn mountinfo_rejects_non_octal_escape() {
-        let err = unescape_mount_path("/bad\\980").expect_err("non-octal");
+    fn mountinfo_rejects_undefined_but_valid_octal_escape() {
+        let err = unescape_mount_path("/bad\\042").expect_err("undefined escape");
         assert_eq!(err, TopologyError::UnavailableStore);
+    }
+
+    #[test]
+    fn mountinfo_rejects_malformed_major_minor_field() {
+        let err = parse_mountinfo_line("36 35 not-a-device / /mnt rw,relatime - ext4 /dev/sda1 rw")
+            .expect_err("bad major:minor");
+        assert_eq!(err, TopologyError::UnavailableStore);
+    }
+
+    #[test]
+    fn mountinfo_rejects_relative_mount_point_after_unescape() {
+        let err = parse_mountinfo_line("36 35 98:0 / rel\\040mnt rw,relatime - ext4 /dev/sda1 rw")
+            .expect_err("relative mount point");
+        assert_eq!(err, TopologyError::UnavailableStore);
+    }
+
+    #[test]
+    fn mountinfo_parses_valid_line_with_major_minor_validation() {
+        let entry = parse_mountinfo_line(
+            "36 35 253:0 / /var/lib/agentbed/watchdog rw,relatime - ext4 /dev/sda1 rw",
+        )
+        .expect("parse");
+        assert_eq!(entry.mount_id, 36);
+        assert_eq!(entry.mount_point, "/var/lib/agentbed/watchdog");
     }
 
     #[test]
@@ -795,8 +845,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_major_minor_rejects_ambiguous_device_token() {
+        let err = parse_major_minor("not-a-device").expect_err("bad dev");
+        assert_eq!(err, TopologyError::UnavailableStore);
+    }
+
+    #[test]
     fn mount_point_contains_respects_component_boundary() {
         assert!(mount_point_contains("/var", "/var/lib"));
         assert!(!mount_point_contains("/var", "/var-lib"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspect_existing_layout_rejects_broken_symlink_without_exists_gate() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let base = std::env::temp_dir().join(format!("agb8-topology-broken-{nanos}"));
+        fs::create_dir_all(&base).expect("store root");
+        let broken = base.join("state");
+        std::os::unix::fs::symlink("/nonexistent/agb8-target", &broken).expect("symlink");
+        let err = inspect_existing_layout(&base).expect_err("broken symlink");
+        assert_eq!(err, TopologyError::SymlinkComponent);
+        let _ = fs::remove_dir_all(&base);
     }
 }
