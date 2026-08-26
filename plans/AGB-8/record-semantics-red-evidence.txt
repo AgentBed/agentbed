@@ -1,0 +1,28 @@
+AGB-8 L03 record-semantics micro-RED evidence
+Rejected local GREEN: bb042a4bb4e76652cc65f413121eb9f99f91db43
+Remote PR head (unchanged): dffcbb591cffbdfd000f80f6208e768e008db643
+Parent accepted RED: 7f2a83d33c4b336f23bc175a15720701bc11805e
+Captured: 2026-08-26 (bare/unpiped; production unchanged at bb042a4)
+
+Command: cargo test -p agentbed-watchdogd --test l03_record_semantics_repair
+Exit: 101
+Causal failure: 3/3 record-semantics repair tests failed (0 passed)
+
+Failing tests and causal output:
+1. record_semantics_rejects_empty_binding_components
+   - accepted-invalid: empty_host_id, empty_tx_id, empty_lease_id (reader accepted all three)
+2. record_semantics_rejects_impossible_initial_lease_window
+   - accepted-invalid: lease_expires_after_deadline, lease_expires_not_policy_window
+3. record_semantics_reopen_rejects_renewal_expiry_inflation
+   - reopen succeeded with inflated lease_expires_at t0+10_000 instead of policy t0+5_400
+   - armed state reconstructed lease_expires_at = 1700010000 (inflated)
+
+Table subcases exercised:
+- empty_host_id, empty_tx_id, empty_lease_id
+- lease_expires_after_deadline, lease_expires_not_policy_window
+
+Findings covered: empty binding components accepted (L03-AC02),
+initial lease window not policy-bound (L03-AC05/L03-AC07),
+renewal expiry inflation accepted on reopen (L03-AC07/L03-AC09).
+
+GREEN not claimed. Production repair unauthorized pending record-semantics RED acceptance.
