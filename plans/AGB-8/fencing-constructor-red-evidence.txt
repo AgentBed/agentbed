@@ -1,0 +1,17 @@
+AGB-8 L03 fencing-constructor REVIEW RED evidence
+GREEN parent: 02267647dc784a7ef96ca5eb4f65b26c39a2c162
+Captured: 2026-08-26 (bare/unpiped; production unchanged)
+
+Command: cargo test -p agentbed-watchdogd --test fencing_seam
+Exit: 101
+Result: 9 passed; 1 failed; 0 ignored
+
+Causal failure (1):
+- fencing_seam_production_has_no_panic_constructor_or_raw_i32_api — production still exports `from_trusted_i32`, `.expect("trusted worker_group_tag")`, and public constructors with `worker_group_tag: i32`
+
+Passing additive/runtime subcheck:
+- fencing_seam_try_from_raw_runtime_accepts_and_rejects — `WorkerGroupTag::try_from_raw` accepts 2/42/i32::MAX and rejects 0/1/i32::MAX+1 as MalformedRequest
+
+Existing eight fencing_seam tests: all pass (semantics unchanged).
+
+GREEN repair unauthorized. No push at RED checkpoint.

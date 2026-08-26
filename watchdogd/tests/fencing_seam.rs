@@ -348,3 +348,54 @@ fn fencing_seam_unavailable_production_fencer_refuses_begin_authority() {
         "unavailable fencer must fail closed without signaling"
     );
 }
+
+// --- constructor safety REVIEW RED (additive; existing eight tests unchanged) ---
+
+#[test]
+fn fencing_seam_try_from_raw_runtime_accepts_and_rejects() {
+    use agentbed_watchdogd::WorkerGroupTag;
+
+    for raw in [2_u32, 42, i32::MAX as u32] {
+        WorkerGroupTag::try_from_raw(raw).expect("valid worker_group_tag");
+    }
+    for raw in [0_u32, 1, i32::MAX as u32 + 1] {
+        let err = WorkerGroupTag::try_from_raw(raw).expect_err("reserved worker_group_tag");
+        assert_eq!(
+            err,
+            RpcError::MalformedRequest,
+            "reserved tag {raw} must refuse as MalformedRequest"
+        );
+    }
+}
+
+#[test]
+fn fencing_seam_production_has_no_panic_constructor_or_raw_i32_api() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut production_src = String::new();
+    for entry in fs::read_dir(manifest_dir.join("src")).expect("src dir") {
+        let entry = entry.expect("entry");
+        if entry.path().extension().is_none_or(|ext| ext != "rs") {
+            continue;
+        }
+        production_src.push_str(&fs::read_to_string(entry.path()).expect("read source"));
+    }
+    assert!(
+        !production_src.contains("from_trusted_i32"),
+        "production must not export from_trusted_i32 panic constructor"
+    );
+    assert!(
+        !production_src.contains(".expect(\"trusted worker_group_tag\")"),
+        "production must not panic on trusted worker_group_tag construction"
+    );
+    let protocol_src =
+        fs::read_to_string(manifest_dir.join("src/rpc/protocol.rs")).expect("protocol.rs");
+    assert!(
+        !protocol_src.contains("worker_group_tag: i32"),
+        "public SessionBind/lease/heartbeat constructors must not accept raw i32 worker_group_tag"
+    );
+    assert!(
+        protocol_src.contains("worker_group_tag: WorkerGroupTag")
+            || protocol_src.contains("-> Result<"),
+        "constructors must consume validated WorkerGroupTag or return Result"
+    );
+}
