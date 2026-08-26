@@ -86,19 +86,8 @@ fn handle_authenticated(
     core.handle_request(verified, session)
 }
 
-/// PLAN `WorkerGroupTag` wire validation — production must enforce at decode/bind in GREEN.
-fn validate_worker_group_tag_wire(raw: i32) -> Result<u32, &'static str> {
-    if raw < 0 {
-        return Err("negative worker_group_tag");
-    }
-    let tag = u32::try_from(raw).map_err(|_| "worker_group_tag above u32::MAX")?;
-    if tag == 0 || tag == 1 {
-        return Err("reserved worker_group_tag");
-    }
-    Ok(tag)
-}
-
-fn session_bind_frame_with_process_group(process_group: serde_json::Value) -> Vec<u8> {
+/// Future-shape SessionBind wire (GREEN renames `process_group` → `worker_group_tag`).
+fn future_session_bind_frame(worker_group_tag: serde_json::Value) -> Vec<u8> {
     let envelope = serde_json::json!({
         "version": 1,
         "payload": {
@@ -106,7 +95,7 @@ fn session_bind_frame_with_process_group(process_group: serde_json::Value) -> Ve
             "tx_id": "tx-wire",
             "epoch": 1,
             "lease_id": "lease-wire",
-            "process_group": process_group,
+            "worker_group_tag": worker_group_tag,
             "client_nonce": "nonce-wire",
         }
     });
@@ -114,23 +103,48 @@ fn session_bind_frame_with_process_group(process_group: serde_json::Value) -> Ve
     encode_frame(&payload).expect("frame")
 }
 
-fn bootstrap_session_expect_err(
+fn is_reserved_tag_refusal(err: &RpcError) -> bool {
+    matches!(
+        err,
+        RpcError::MalformedFrame | RpcError::WrongBinding | RpcError::StaleReconnect
+    )
+}
+
+fn assert_worker_group_tag_refused_on_decode(tag: serde_json::Value) {
+    let frame = future_session_bind_frame(tag.clone());
+    match decode_session_bind(&frame) {
+        Ok(bind) => panic!(
+            "worker_group_tag {tag} must be refused by production decode/bind, got {bind:?}"
+        ),
+        Err(RpcError::DenyUnknown) => panic!(
+            "worker_group_tag {tag}: DenyUnknown is legacy-shape mismatch, not reserved-tag refusal"
+        ),
+        Err(err) => assert!(
+            is_reserved_tag_refusal(&err),
+            "worker_group_tag {tag}: uniform reserved-tag refusal expected, got {err:?}"
+        ),
+    }
+}
+
+fn decode_and_bind_future_tag(
     core: &WatchdogCore,
     bundle: &FakeBundle,
-    process_group: i32,
-) -> RpcError {
+    tag: serde_json::Value,
+) -> Result<(), RpcError> {
     bundle
         .peer_cred
         .enqueue_cred(common::FakePeerCred::broker_cred(0, 0, 4242));
-    let bind = SessionBind::new(
-        "host-test",
-        "tx-wire",
-        1,
-        "lease-wire",
-        process_group,
-        "client-nonce-seam",
-    );
-    SessionState::bind(core, &bundle.peer_cred, &bundle.entropy, bind).expect_err("bind refuse")
+    let frame = future_session_bind_frame(tag);
+    let bind = decode_session_bind(&frame)?;
+    SessionState::bind(core, &bundle.peer_cred, &bundle.entropy, bind).map(|_| ())
+}
+
+fn assert_worker_group_tag_accepted(tag: serde_json::Value) {
+    let core_dir = scratch_dir("fencing-seam-wire-accept");
+    let bundle = FakeBundle::new();
+    let core = open_core(&core_dir, &bundle);
+    decode_and_bind_future_tag(&core, &bundle, tag.clone())
+        .unwrap_or_else(|err| panic!("worker_group_tag {tag} must decode/bind on production, got {err:?}"));
 }
 
 // --- source absence / trait contract (RED: production still has real signaling) ---
@@ -206,43 +220,21 @@ fn fencing_seam_production_unavailable_fencer_only() {
     );
 }
 
-// --- worker_group_tag wire contract (field still named process_group until GREEN) ---
+// --- worker_group_tag wire contract (future-shape JSON via public decode/bind surfaces) ---
 
 #[test]
 fn fencing_seam_worker_group_tag_rejects_zero_one_negative_and_above_i32_max() {
-    for bad_pg in [0, 1, -1] {
-        let core_dir = scratch_dir("fencing-seam-wire-reject");
-        let bundle = FakeBundle::new();
-        let core = open_core(&core_dir, &bundle);
-        let err = bootstrap_session_expect_err(&core, &bundle, bad_pg);
-        assert!(
-            matches!(
-                err,
-                RpcError::MalformedFrame | RpcError::DenyUnknown | RpcError::WrongBinding
-            ),
-            "uniform wire/bind refusal for worker_group_tag {bad_pg}, got {err:?}"
-        );
-        validate_worker_group_tag_wire(bad_pg).expect_err("contract rejects bad tag");
-    }
-    let frame = session_bind_frame_with_process_group(serde_json::json!(i64::from(i32::MAX) + 1));
-    let decoded = decode_session_bind(&frame).expect("GREEN must decode u32 tags above i32::MAX");
-    let tag = validate_worker_group_tag_wire(decoded.process_group)
-        .expect("tag above i32::MAX accepted as opaque correlation");
-    assert_eq!(tag, i32::MAX as u32 + 1);
+    assert_worker_group_tag_refused_on_decode(serde_json::json!(0));
+    assert_worker_group_tag_refused_on_decode(serde_json::json!(1));
+    assert_worker_group_tag_refused_on_decode(serde_json::json!(-1));
+    assert_worker_group_tag_refused_on_decode(serde_json::json!(i64::from(i32::MAX) + 1));
 }
 
 #[test]
 fn fencing_seam_worker_group_tag_accepts_opaque_correlation_only() {
-    for good in [2, 42, i32::MAX] {
-        let core_dir = scratch_dir("fencing-seam-wire-accept");
-        let bundle = FakeBundle::new();
-        let core = open_core(&core_dir, &bundle);
-        bootstrap_session(&core, &bundle, "tx-wire-ok", 1, "lease-wire", good);
-        let frame = session_bind_frame_with_process_group(serde_json::json!(good));
-        let bind = decode_session_bind(&frame).expect("decode good tag");
-        let tag = validate_worker_group_tag_wire(bind.process_group).expect("opaque tag");
-        assert_eq!(tag, u32::try_from(good).expect("tag"));
-    }
+    assert_worker_group_tag_accepted(serde_json::json!(2));
+    assert_worker_group_tag_accepted(serde_json::json!(42));
+    assert_worker_group_tag_accepted(serde_json::json!(i32::MAX));
 }
 
 // --- hermetic recording-fake ordering branches ---
