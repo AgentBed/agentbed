@@ -1,0 +1,25 @@
+AGB-8 L03 RED evidence (fencing_fixture borrow fix)
+PLAN head: 57d17c2364784bdd6609ce6042c60b79bac6be13
+Captured: 2026-08-25 (bare/unpiped; production unchanged stub)
+
+Command: cargo test -p agentbed-watchdogd --test l03_failure_matrix
+Exit: 101
+Causal failure: compile error — `agentbed_watchdogd` Gate-1 stub lacks modules/APIs (`error`, `interfaces`, `read_model`, `rpc`, `AuthenticatedRequest`, `WatchdogCore`, `SessionState`, authenticated `decode_request`/`handle_request`); `include_str!` targets absent.
+Scenario intent: full L03 failure matrix with authenticated envelope contract.
+
+Command: cargo test -p agentbed-watchdogd --test fencing_fixture
+Exit: 101
+Causal failure: compile error — missing `agentbed_watchdogd::fencing::ProductionProcessGroupFencer` (E0432 only; Drop E0502 borrow conflict resolved by capturing PIDs before mutable child borrows).
+Scenario intent: spawned `process_group(0)` fixture with bounded non-blocking Drop cleanup.
+
+Command: cargo test -p agentbed-broker --test l03_watchdog_client
+Exit: 101
+Causal failure: compile error — missing `broker/src/watchdog/client.rs`, `agentbed_broker::watchdog`, `agentbed_watchdogd` protocol types.
+Scenario intent: broker bootstrap-before-authority boundary and WAL regression.
+
+Command: cargo test -p agentbed-adapter-nix --test l03_protected_broker_state
+Exit: 101
+Causal failure: runtime — 5/6 tests panic at `expect_err` because `/var/lib/agentbed/broker/state` paths not class-F yet (legacy `/wal/` alias still rejected).
+Scenario intent: L03-AC01 broker/state protection gap.
+
+GREEN not claimed. Production implementation unauthorized.

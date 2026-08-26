@@ -22,6 +22,7 @@ dependencies = [
  "agentbed-adapter-nix",
  "agentbed-protocol",
  "agentbed-schemas",
+ "agentbed-watchdogd",
  "base64",
  "libc",
  "serde",
@@ -62,6 +63,11 @@ dependencies = [
 [[package]]
 name = "agentbed-watchdogd"
 version = "0.0.1"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "ahash"

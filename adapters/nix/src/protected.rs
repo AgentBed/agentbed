@@ -46,7 +46,8 @@ fn check_one(change: &ConfigFileChange, normalized: &str) -> Result<(), Protecte
     {
         return Err(ProtectedRejectReason::Watchdog);
     }
-    if lower.contains("/var/lib/agentbed/wal/") {
+    if lower.contains("/var/lib/agentbed/broker/state") || lower.contains("/var/lib/agentbed/wal/")
+    {
         return Err(ProtectedRejectReason::BrokerWal);
     }
     if lower.contains("/var/lib/agentbed/rollback/") {
@@ -62,6 +63,9 @@ fn check_one(change: &ConfigFileChange, normalized: &str) -> Result<(), Protecte
     let semantic = normalize_nix_content(&change.content);
     if semantic.contains("${") {
         return Err(ProtectedRejectReason::DynamicExpression);
+    }
+    if content_selects_broker_state(&semantic) {
+        return Err(ProtectedRejectReason::BrokerWal);
     }
     if content_selects_watchdog(&semantic) {
         return Err(ProtectedRejectReason::Watchdog);
@@ -215,6 +219,10 @@ fn append_quoted_ident(chars: &[char], start: usize, out: &mut String) -> usize 
         i += 1;
     }
     i
+}
+
+fn content_selects_broker_state(content: &str) -> bool {
+    content.contains("/var/lib/agentbed/broker/state") || content.contains("agentbed/broker/state")
 }
 
 fn content_selects_watchdog(content: &str) -> bool {

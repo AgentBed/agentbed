@@ -1,0 +1,37 @@
+AGB-8 L03 convergence micro-RED (green audit) evidence
+Rejected local GREEN: 89582ae108241c5c33d5be434fa98f88db922059
+Remote PR head (unchanged): dffcbb591cffbdfd000f80f6208e768e008db643
+Parent accepted RED: a503c02f03d0a2ebe7266043f61f7a461a7d06f9
+Prior rejected RED contract: fe38cfb5ece64ef4fcfe7f60970dc9b5ebf3b0fe
+Captured: 2026-08-26 (bare/unpiped; production unchanged at 89582ae)
+
+Command: cargo test -p agentbed-watchdogd --test l03_green_audit_repair
+Exit: 101
+Causal failure: 5/5 green-audit repair tests failed (0 passed)
+
+Failing tests and causal output:
+1. green_audit_open_reconstructs_durable_binding
+   - expected StaleReconnect for conflicting tx B after public WatchdogCore::open
+   - bind succeeded for tx-b/lease-b/tag-200
+2. green_audit_reopen_preserves_renewal_observation_time
+   - expected second renewal after reopen to ACK with record_count == 3
+   - got ClockRegression on second renewal (first renewal oracle: record_count == 2, last_kind LeaseRenewed)
+3. green_audit_decision_rejects_clock_regression
+   - expected ClockRegression with no BEGIN record after clock moved backward
+   - got AuthorityChosen { request_id: "req-decide-clock", kind: BeginCommit }
+4. green_audit_pre_unix_arm_time_fails_closed
+   - expected SafeModeActive with no ARMED record for pre-UNIX arm time
+   - got Armed { request_id: "req-arm-pre" }
+5. green_audit_reader_rejects_invalid_record_schema
+   - accepted-invalid: armed_invalid_nanoseconds (reader accepted corrupt Armed)
+   - accepted-invalid: lease_renewed_forbidden_armed_fields (reader accepted LeaseRenewed with forbidden base/deadline)
+
+Contract correction: record_count/last_kind oracle replaces infeasible lease_renewed_count;
+schema test evaluates both corruptions before final assertion.
+
+Findings covered: public open skips durable binding reconstruction (L03-AC04),
+renewal observation time vs expiry high-water (L03-AC07), decision clock
+regression guard (L03-AC02), pre-UNIX authority time fail-closed (L03-AC03),
+strict per-kind record schema validation (L03-AC09).
+
+GREEN not claimed. Production repair unauthorized pending green-audit RED acceptance.

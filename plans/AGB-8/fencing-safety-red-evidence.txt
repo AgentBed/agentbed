@@ -1,0 +1,26 @@
+AGB-8 L03 fencing-safety RED evidence (test-oracle repair)
+PLAN head: 83821e57aefbddd039d3c31b169a01285909ec12
+RED parent: 466ee3470f418032e415d854aa31f6e56c165a83
+Captured: 2026-08-26 (bare/unpiped; production unchanged; fencing_fixture.rs deleted)
+
+Precondition: watchdogd/tests/fencing_fixture.rs absent.
+
+Command: cargo test -p agentbed-watchdogd --test fencing_seam
+Exit: 101
+Result: 0 passed; 8 failed; 0 ignored
+
+Causal failures (8):
+- fencing_seam_source_has_no_signal_or_wait_syscalls — fencing.rs still contains libc::kill and unsafe
+- fencing_seam_trait_signal_has_no_caller_supplied_pgid_parameter — ProcessGroupFence::signal still takes pgid: i32
+- fencing_seam_production_unavailable_fencer_only — ProductionProcessGroupFencer present; UnavailableProcessGroupFencer absent
+- fencing_seam_unavailable_production_fencer_refuses_begin_authority — lib.rs does not export UnavailableProcessGroupFencer
+- fencing_seam_worker_group_tag_rejects_zero_one_negative_and_above_i32_max — future-shape worker_group_tag frame returns DenyUnknown (legacy process_group wire still required); MalformedRequest oracle not yet satisfied
+- fencing_seam_worker_group_tag_accepts_opaque_correlation_only — future-shape worker_group_tag 2 returns DenyUnknown on decode/bind
+- fencing_seam_after_term_absent_skips_kill_and_reaches_zero_jobs — unconditional Kill after discarded AfterTerm
+- fencing_seam_after_term_survivor_requires_kill_wait_afterkill_then_zero_jobs — missing second bounded_wait after Kill
+
+Oracle repair: reserved-tag reject tests require debug string exactly MalformedRequest (not MalformedFrame/WrongBinding/StaleReconnect).
+
+Wire contract tests use future-shape JSON key worker_group_tag only (no process_group, no test-local validator).
+
+GREEN not claimed. Production implementation unauthorized pending independent RED acceptance.

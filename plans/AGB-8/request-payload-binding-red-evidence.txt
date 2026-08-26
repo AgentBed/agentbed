@@ -1,0 +1,47 @@
+AGB-8 L03 request-payload-binding micro-RED evidence (contract-corrected)
+Rejected exact head: 161fa554b07f7ec74a359a3c87e9dea5cb69c35f
+Parent RED commit corrected: b875b9cc082cc5fdf87178f09d950a4ad5b1ccb2
+Base/merge-base: 01a4bf8c8de2a5cb4544bf74af9bb819c29adf1c
+Native review: ID 5033388088, agentos-reviewer (302623761), CHANGES_REQUESTED
+Captured: 2026-08-26 (bare/unpiped; production unchanged at 161fa554; warning-free clippy on repair suite)
+
+Command: cargo test -p agentbed-watchdogd --test l03_request_payload_binding_repair
+Exit: 101
+Causal failure: 2/3 request-payload-binding repair tests failed (1 passed)
+
+Oracle contracts:
+- Hostile mismatch: typed WrongBinding or WrongEpoch at decode before counter consumption;
+  valid counterpart must succeed at the same counter 1.
+- Cross-tx Arm: only typed WrongBinding/WrongEpoch refusal at decode or handle is acceptable;
+  decode_wrong_error, handle_wrong_error, decode_not_attempted, decode_accepted_invalid,
+  and handle_accepted_invalid are failures; authority state must remain unchanged.
+- Positive control: request_id and request-kind projection preserved for all five kinds.
+
+Hostile subcases exercised (15): Arm/host_mismatch, Arm/tx_mismatch, Arm/epoch_mismatch,
+ReportHealth/host_mismatch, ReportHealth/tx_mismatch, ReportHealth/epoch_mismatch,
+RequestLeaseRenewal/host_mismatch, RequestLeaseRenewal/tx_mismatch, RequestLeaseRenewal/epoch_mismatch,
+Heartbeat/host_mismatch, Heartbeat/tx_mismatch, Heartbeat/epoch_mismatch,
+RequestDecision/host_mismatch, RequestDecision/tx_mismatch, RequestDecision/epoch_mismatch
+
+Failing tests and all-observation causal output:
+1. all_five_request_kinds_reject_payload_binding_mismatch_without_consuming_counter
+   - all 15 hostile subcases: decode accepted-invalid payload (outer envelope exact)
+   - all 15 valid counterparts at counter 1: ReplayCounter (counter consumed by hostile decode)
+   - high-water remained 0; no decision records; no safe-mode marker
+2. cross_transaction_arm_cannot_persist_payload_tx_or_mutate_authority
+   - decode_accepted_invalid
+   - handle_accepted_invalid: Armed { request_id: "req-arm-cross" }
+   - no typed WrongBinding/WrongEpoch refusal at decode or handle
+   - high-water mutation: observed 1, expected 0
+   - decision log mutation: 1 ARMED record for payload tx-b (session bound tx-a)
+   - safe-mode marker: absent
+3. exact_payload_binding_preserves_all_five_authenticated_round_trips
+   - PASS: 5/5 kinds encode/decode with exact embedded host/tx/epoch
+   - request_id and request-kind projection preserved for each kind
+   - high-water/log unchanged
+
+Findings covered: decode_request does not compare embedded LocalRequest host/tx/epoch to
+SessionEstablished (L03-AC04); session tx-a can arm/persist ARMED for payload tx-b (L03-AC06);
+hostile payload refusal does not occur before counter consumption (L03-AC04).
+
+GREEN not claimed. Production repair unauthorized pending corrected RED acceptance.

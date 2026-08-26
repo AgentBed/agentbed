@@ -58,6 +58,7 @@ pub mod signals;
 pub mod storage;
 pub mod tools;
 pub mod transaction;
+pub mod watchdog;
 
 pub use config::BrokerConfig;
 pub use server::Server;
