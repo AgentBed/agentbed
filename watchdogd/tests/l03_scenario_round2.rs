@@ -146,12 +146,15 @@ fn assert_next_request_hits_safe_mode(
         session,
         established,
         counter,
-        arm_request(
+        LocalRequest::arm(
             "req-after-latch",
-            "tx-latch",
-            1,
+            &established.host_id,
+            &established.tx_id,
+            established.epoch,
             "base-a",
             bundle.clock.now() + Duration::from_secs(60),
+            vec!["route_present".to_owned()],
+            vec![],
         ),
     )
     .expect_err("latched core must refuse subsequent arm with SafeModeActive");
