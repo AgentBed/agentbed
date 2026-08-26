@@ -6,7 +6,7 @@
 **Branch:** `agent/agb-8/l03-watchdog-decision-authority`
 **PR:** https://github.com/AgentBed/agentbed/pull/24
 
-The immutable PR ref and gate tracker (GitHub #12) are authoritative for the final candidate SHA after push. **Accepted local implementation head before this RESULT-only commit:** `d27885b0d53db2df072ec484bb0eb12551bba3b4`. Prior remote PR head was `dffcbb591cffbdfd000f80f6208e768e008db643`.
+The immutable PR ref and gate tracker (GitHub #12) are authoritative for the final candidate SHA after push. **Accepted local implementation head before this RESULT-only commit:** `d5baa0c261bc18b541a27b3fc1922de108b64c1f`. Prior rejected remote PR head was `52984ce7d7b044e41f4a810e660f54404e4ce758`.
 
 ## PLAN / RED / GREEN evidence
 
@@ -43,12 +43,21 @@ The immutable PR ref and gate tracker (GitHub #12) are authoritative for the fin
 | Green-audit GREEN | `bb042a4bb4e76652cc65f413121eb9f99f91db43` | authority fidelity repairs (`core.rs`, `read_model.rs`) |
 | Record-semantics RED | `377308620240d78423ac07201fe7b02cc615200e` | `l03_record_semantics_repair.rs` (3 tests, five table subcases) + `record-semantics-red-evidence.txt`; coordinator bare exit **101** (0/3) |
 | **Final production GREEN** | `d27885b0d53db2df072ec484bb0eb12551bba3b4` | centralized `lease_expiry_at` policy; empty-binding rejection; strict ARMED/renewal schema; accepted lint-only identity-map cleanup in test probe |
+| RESULT closeout (convergence) | `e9e473edde1cebbbd78e2a5030c12eb4f69be4cf` | prior `RESULT.md` reconciliation for convergence repair chain |
+| **Rejected remote PR head (epoch review)** | `52984ce7d7b044e41f4a810e660f54404e4ce758` | last pushed head before epoch-allocation repair; CI `32989144226`, docs `32989144173`, supply-chain `32989144082` PASS; scenario verifier `eaf5642e-9793-48f4-9646-555bd88ab581` APPROVED — **all stale after epoch repair** |
+| Epoch-allocation RED | `5b4030333c05a185ded1826d8b7e642c66756dec` | `l03_epoch_allocation_repair.rs` (3 tests) + `epoch-allocation-red-evidence.txt`; coordinator bare exit **101** (0/3) |
+| Epoch-allocation RED (contract correction) | `01e464ac325d81a9518b5ef92f815fad7fb9f8ce` | oracle fixes atop `5b403033`; coordinator bare exit **101** (0/3) with proposals `0` and `4000000000` and all-observation mutation proof |
+| **Epoch-allocation GREEN** | `d5baa0c261bc18b541a27b3fc1922de108b64c1f` | server-issued epoch on fresh bind; Arm/advance exact checked successor only; `try_bind` `pub(crate)`; test mutability/`established.epoch` coupling |
 
-Accepted initial RED tests/fixtures/evidence remain byte-identical to `58ec7da` except superseded fencing paths. Fencing-safety RED oracle semantics preserved through `5b5d207`. Constructor-safety RED at `dffd5bdb` adds two additive `fencing_seam` tests (10 total). Convergence repair suites (`l03_native_review_repair`, `l03_green_audit_repair`, `l03_record_semantics_repair`) are additive; accepted RED evidence files preserved except coordinator-accepted lint-only probe cleanup in `l03_record_semantics_repair.rs` at `d27885b`.
+Accepted initial RED tests/fixtures/evidence remain byte-identical to `58ec7da` except superseded fencing paths. Fencing-safety RED oracle semantics preserved through `5b5d207`. Constructor-safety RED at `dffd5bdb` adds two additive `fencing_seam` tests (10 total). Convergence repair suites (`l03_native_review_repair`, `l03_green_audit_repair`, `l03_record_semantics_repair`) are additive; accepted RED evidence files preserved except coordinator-accepted lint-only probe cleanup in `l03_record_semantics_repair.rs` at `d27885b`. Epoch-allocation RED oracle assertions and hostile inputs at `01e464ac` remain semantically unchanged; GREEN formatting touched only the new RED file layout. Post-GREEN test edits are mechanical `bind(&mut core)` mutability plus legitimate post-bind Arm/decision requests using `SessionEstablished.epoch`; stale/wrong-epoch probes remain hostile.
 
 **Constructor-safety repair:** removed `WorkerGroupTag::from_trusted_i32` and all production `.expect("trusted worker_group_tag")` paths. `SessionBind::new`, `LocalRequest::request_lease_renewal`, and `LocalRequest::heartbeat` now require a validated `WorkerGroupTag`; test/broker call sites use `try_from_raw` via `valid_worker_group_tag` fixture helper.
 
-## Scenario verification (rejected head) and closure mapping
+## Scenario verification (rejected head `52984ce`) — stale after epoch repair
+
+Independent scenario verifier run `eaf5642e-9793-48f4-9646-555bd88ab581` at exact rejected SHA `52984ce7d7b044e41f4a810e660f54404e4ce758` returned **APPROVED**. Exact-head CI at that SHA: workflow `32989144226` PASS, docs `32989144173` PASS, supply-chain `32989144082` PASS. **All stale** after epoch-allocation repair through `d5baa0c`; fresh exact-pushed-head scenario verification required.
+
+## Scenario verification (rejected head `7c4e2b7`) and closure mapping
 
 Independent scenario verifier run `00951621-3f57-4a94-ab48-5c13bebf5381` at exact rejected SHA `7c4e2b76f9ec68d910de650ebd73c31b1b084e8b` returned **NEEDS_FIXES** with three blockers:
 
@@ -62,7 +71,7 @@ Independent scenario verifier run `623845d0-c905-4add-a25a-4156162decb3` initial
 
 Full closure matrix: `l03_scenario_round2` **15/15** at accepted local implementation head (G2 4/4 + G3 7/7 = **11/11**).
 
-## Native GitHub review (rejected pushed head)
+## Native GitHub review (rejected pushed heads)
 
 Independent native exact-head review at rejected PR head `dffcbb591cffbdfd000f80f6208e768e008db643`:
 
@@ -73,9 +82,19 @@ Independent native exact-head review at rejected PR head `dffcbb591cffbdfd000f80
 | State | **CHANGES_REQUESTED** |
 | Triggered repair | native-review RED `a503c02f` → convergence GREEN/RED chain through `d27885b` |
 
-Prior scenario verification approvals at `f5532bf` and native review at `dffcbb5` are **stale** relative to local repair heads after `dffcbb5`. Fresh exact-pushed-head scenario verification, CI, and native GitHub review are still required before merge readiness.
+Independent native exact-head review at rejected PR head `52984ce7d7b044e41f4a810e660f54404e4ce758`:
 
-## Convergence repair chain (post–native review)
+| Field | Value |
+|---|---|
+| Review ID | `5032875711` |
+| Reviewer | `agentos-reviewer` (GitHub ID `302623761`) |
+| State | **CHANGES_REQUESTED** |
+| Finding | Caller-controlled `SessionBind`/`Arm` epoch could jump durable high-water from `0` to arbitrary `4_000_000_000` |
+| Triggered repair | epoch-allocation RED `5b403033` + correction `01e464ac` → GREEN `d5baa0c` |
+
+Prior scenario verification approvals at `f5532bf`, native reviews at `dffcbb5` and `52984ce`, and CI at `52984ce` are **stale** relative to local repair heads after `d5baa0c`. Fresh exact-pushed-head scenario verification, CI, and native GitHub review are still required before merge readiness. Review `5032875711` and prior approvals are stale after `d5baa0c`.
+
+## Convergence repair chain (post–native review 5032007100)
 
 Coordinator-accepted repair sequence closing native-review and coordinator-audit findings without scope expansion:
 
@@ -87,6 +106,16 @@ Coordinator-accepted repair sequence closing native-review and coordinator-audit
 | Green-audit GREEN | `bb042a4` | 5/5 pass — authority fidelity in `core.rs`/`read_model.rs` |
 | Record-semantics RED | `3773086` | 3/3 fail (exit 101) — empty bindings, impossible initial lease window, inflated renewal expiry on reopen |
 | Final GREEN | `d27885b` | 3/3 + all prior suites pass — centralized `lease_expiry_at`; accepted identity-map Clippy cleanup in test probe only |
+
+## Epoch-allocation repair chain (post–native review 5032875711)
+
+Coordinator-accepted repair closing native-review finding on caller-controlled epoch jumps:
+
+| Step | SHA | Outcome |
+|---|---|---|
+| Epoch-allocation RED | `5b403033` | 3/3 tests fail causally (exit 101) — broker epoch echoed on bind; malicious Arm mutates high-water and appends ARMED |
+| Epoch-allocation RED (correction) | `01e464ac` | 3/3 fail (exit 101) — proposals `0` and `4000000000`; all-observation mutation proof |
+| Epoch-allocation GREEN | `d5baa0c` | 3/3 + all prior suites pass — watchdog-issued exact successor; Arm/advance without caller epoch jumps |
 
 ## Critical fencing incident — root cause and safe design
 
@@ -119,7 +148,9 @@ Coordinator-accepted repair sequence closing native-review and coordinator-audit
 | **F14** | Additive manifest checks validated (not ignored) |
 | **F15** | Late lease renewal refused; corrupt log at decision enters safe mode |
 
-## Current production behavior (accepted local head `d27885b`)
+## Current production behavior (accepted local head `d5baa0c`)
+
+**Epoch allocation (`core.rs`, `session.rs`):** on fresh bind, caller-supplied `SessionBind.epoch` is non-authoritative. Watchdog strictly reads durable high-water, computes `checked_add(1)` successor (overflow → safe mode), and returns/binds that value in `SessionEstablished` without persisting during bind. Reconnect preserves exact durable binding state. `handle_arm` requires request epoch == bound epoch == checked successor; `advance_epoch` independently persists only the exact checked successor (no `>=` jumps). Corrupt/missing high-water or max-epoch overflow enters safe mode. `SessionState::try_bind` is `pub(crate)` — raw bind is not externally callable.
 
 **Authority reconstruction (`core.rs`, `read_model.rs`):** public `WatchdogCore::open` with a nonempty log performs the same epoch cross-check and durable authority reconstruction as `reopen` — conflicting session binds return `StaleReconnect`; exact binding may reconnect. `binding_fields` rejects empty `host_id`, `tx_id`, and `lease_id`. Decision reconstruction is single-shot: duplicate `BEGIN_*` records fail closed. `LeaseRenewed` records carry `renewed_at`; reconstruction sets `last_activity = renewed_at` (not lease expiry) after validating renewal occurred before prior expiry and hard deadline.
 
@@ -133,7 +164,7 @@ Coordinator-accepted repair sequence closing native-review and coordinator-audit
 
 ## Scope delivered
 
-Hermetic L03 watchdog decision authority: durable append-only decision log and epoch high-water store; fail-closed safe-mode and external-floor handling; injected topology/durability/process-group/job/invariant interfaces; framed authenticated local RPC (`SessionBind` with `worker_group_tag` → `SessionEstablished` → five production request types); broker narrow client stub (wire DTOs only); Nix protected-resource rejection for `/var/lib/agentbed/broker/state`; `UnavailableProcessGroupFencer` (no syscall fencing); production topology probe; `fencing_seam.rs` (10 tests); closure scenario round 2 (15 tests); failure matrix (54 tests); review repair suite (19 tests); convergence repair suites — native review repair (6), green audit repair (5), record semantics repair (3); topology lib unit tests (19).
+Hermetic L03 watchdog decision authority: durable append-only decision log and epoch high-water store; fail-closed safe-mode and external-floor handling; injected topology/durability/process-group/job/invariant interfaces; framed authenticated local RPC (`SessionBind` with `worker_group_tag` → `SessionEstablished` → five production request types); broker narrow client stub (wire DTOs only); Nix protected-resource rejection for `/var/lib/agentbed/broker/state`; `UnavailableProcessGroupFencer` (no syscall fencing); production topology probe; `fencing_seam.rs` (10 tests); closure scenario round 2 (15 tests); failure matrix (54 tests); review repair suite (19 tests); convergence repair suites — native review repair (6), green audit repair (5), record semantics repair (3), epoch allocation repair (3); topology lib unit tests (19).
 
 Production paths:
 
@@ -151,26 +182,27 @@ Production paths:
 |---|---|
 | **L03-AC01** | `watchdogd/src/topology.rs` (`ProductionTopologyProbe`); `watchdogd/src/interfaces.rs`; `adapters/nix/src/protected.rs`; `watchdogd/tests/l03_failure_matrix.rs` topology matrix; `watchdogd/tests/l03_scenario_round2.rs` G1 (4); topology lib tests (19); `adapters/nix/tests/l03_protected_broker_state.rs` (6 tests) |
 | **L03-AC02** | `watchdogd/src/read_model.rs`, `watchdogd/src/core.rs`; `broker/src/watchdog/client.rs`; matrix AC02 + `broker/tests/l03_watchdog_client.rs`; review F1/F10/F11 |
-| **L03-AC03** | `watchdogd/src/core.rs`, `watchdogd/src/durability_store.rs`, `watchdogd/src/read_model.rs`; epoch/safe-mode/fsync/rename/readback matrix; `l03_scenario_round2` G2/G3 (**11**); round-3 `g3_unreadable_parent_dir_temp_residue_is_ambiguous`; review F2/F3/F9 |
+| **L03-AC03** | `watchdogd/src/core.rs`, `watchdogd/src/durability_store.rs`, `watchdogd/src/read_model.rs`; epoch/safe-mode/fsync/rename/readback matrix; `l03_scenario_round2` G2/G3 (**11**); `l03_epoch_allocation_repair` (3); round-3 `g3_unreadable_parent_dir_temp_residue_is_ambiguous`; review F2/F3/F9 |
 | **L03-AC04** | `watchdogd/src/rpc/{protocol,server}.rs`, `watchdogd/src/session.rs`, `watchdogd/src/peercred.rs`, `watchdogd/src/worker_group_tag.rs`; `broker/src/watchdog/client.rs`; frame codec, stream peercred, session bootstrap, counter/capability binding, socket permissions, unix round-trip; review F8 |
 | **L03-AC05** | `watchdogd/src/core.rs` arming validation; matrix AC05; review F6/F7/F14 |
 | **L03-AC06** | `watchdogd/src/core.rs` authority selection; broker WAL safe-mode tests; review F15 |
 | **L03-AC07** | `watchdogd/src/session.rs`, `watchdogd/src/core.rs` lease/heartbeat with `worker_group_tag`; matrix AC07; review F15 late renewal |
 | **L03-AC08** | `watchdogd/src/fencing.rs` (`UnavailableProcessGroupFencer`); `watchdogd/tests/fencing_seam.rs` (10/10); matrix AC08 + review F5; no spawned fixture; `watchdogd/src/**` contains no `libc::kill`/`waitpid`/`killpg`/`sigqueue` |
-| **L03-AC09** | `watchdogd/tests/l03_failure_matrix.rs` (54) + `watchdogd/tests/l03_review_repair.rs` (19) + `watchdogd/tests/l03_scenario_round2.rs` (15) + `watchdogd/tests/fencing_seam.rs` (10) + `l03_native_review_repair.rs` (6) + `l03_green_audit_repair.rs` (5) + `l03_record_semantics_repair.rs` (3) |
+| **L03-AC09** | `watchdogd/tests/l03_failure_matrix.rs` (54) + `watchdogd/tests/l03_review_repair.rs` (19) + `watchdogd/tests/l03_scenario_round2.rs` (15) + `watchdogd/tests/fencing_seam.rs` (10) + `l03_native_review_repair.rs` (6) + `l03_green_audit_repair.rs` (5) + `l03_record_semantics_repair.rs` (3) + `l03_epoch_allocation_repair.rs` (3) — **143** focused hermetic tests at `d5baa0c` |
 | **L03-AC10** | `watchdogd/src/interfaces.rs` + test fakes under `watchdogd/tests/common/`; PLAN §1 assumption 4 — no hostile-root boundary claimed |
 | **L03-AC11** | This `RESULT.md`, bounded closure RED/GREEN chain above, verification commands below (bare/unpiped, exit 0) |
 | **L03-AC12** | No L04/L05/live install/OOB/credentials/router changes; hermetic tests only; no merge |
 
-## Verification commands (bare, unpiped, at pushed head)
+## Verification commands (bare, unpiped)
 
-Coordinator-independent gates at `d27885b` (all exit **0**):
+Independent local gates at accepted implementation head `d5baa0c` (all exit **0**):
 
 ```text
 # safety static scan (read-only)
 watchdogd/tests/fencing_fixture.rs absent
 no libc::kill / libc::waitpid / killpg / sigqueue / from_trusted_i32 in watchdogd/src/**
 
+cargo test -p agentbed-watchdogd --test l03_epoch_allocation_repair     (3 expected)
 cargo test -p agentbed-watchdogd --test l03_record_semantics_repair     (3 expected)
 cargo test -p agentbed-watchdogd --test l03_green_audit_repair          (5 expected)
 cargo test -p agentbed-watchdogd --test l03_native_review_repair        (6 expected)
@@ -188,9 +220,13 @@ cargo test --workspace
 git diff --check 01a4bf8c8de2a5cb4544bf74af9bb819c29adf1c..HEAD
 ```
 
+Focused L03 hermetic matrix at `d5baa0c`: epoch allocation 3 + record semantics 3 + green audit 5 + native repair 6 + failure matrix 54 + scenario 15 + review repair 19 + fencing 10 + watchdog lib 19 + broker client 9 = **143**; fmt and all-target Clippy pass.
+
 DCO sign-off present on every commit `01a4bf8..HEAD`.
 
-**Merge readiness:** not claimed. All prior CI, scenario verification, and native GitHub review evidence at heads before `d27885b` is stale. Fresh exact-pushed-head CI, independent scenario verification of the complete hermetic failure/authority matrix, and a new native GitHub review by `agentos-reviewer` (ID `302623761`) are still required.
+**Do not treat pushed-head CI, scenario verification, or native review at `52984ce` as current** — those gates are stale after epoch repair. Fresh exact-pushed-head full local gates, CI, scenario verification, and native review are required after the RESULT commit is pushed.
+
+**Merge readiness:** not claimed. All prior CI, scenario verification, and native GitHub review evidence at heads before `d5baa0c` is stale. Fresh exact-pushed-head CI, independent scenario verification of the complete hermetic failure/authority matrix, and a new native GitHub review by `agentos-reviewer` (ID `302623761`) are still required.
 
 ## Hard non-goals held (L03-AC12)
 
@@ -205,5 +241,5 @@ No L04 commit/recovery orchestration; no actual promotion/revert execution; no L
 - **Temp-name uniqueness** uses `SystemTime` nanos in helper paths — adequate for hermetic L03 but not claimed as full live readiness hardening; follow-up hardening may adopt stronger entropy without changing authority semantics.
 - No live dedicated-mount provisioning, systemd daemon, NixOS VM, power-loss, spare-node chaos, or OOB mirror evidence — deferred to later authorized lanes (L04–L08).
 - Broker transaction engine does not yet wire full watchdog RPC orchestration (L04 scope).
-- **Prior CI/scenario/native-review evidence is stale** after convergence repair through `d27885b`; fresh exact-pushed-head gates still required (see Verification commands).
+- **Prior CI/scenario/native-review evidence is stale** after epoch-allocation repair through `d5baa0c`; fresh exact-pushed-head gates still required (see Verification commands).
 - Gate 1 remains open; this lane delivers L03 hermetic proof only (PLAN §9).
