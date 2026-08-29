@@ -8,6 +8,16 @@
 
 The immutable PR ref and gate tracker (GitHub #12) are authoritative for the final candidate SHA after push. **Accepted local implementation head before this RESULT-only commit:** `d5baa0c261bc18b541a27b3fc1922de108b64c1f`. Prior rejected remote PR head was `52984ce7d7b044e41f4a810e660f54404e4ce758`.
 
+## Final merge closeout
+
+- **PR:** [#24](https://github.com/AgentBed/agentbed/pull/24), merged 2026-08-26.
+- **Final reviewed source head:** `31b4ff2259fbaecb590ab3c405946890f0837046`.
+- **Independent native review:** `agentos-reviewer` (GitHub ID `302623761`) approved that exact head in review `5033388088`.
+- **Merge commit on `main`:** `8296e9918964b0bb57842997b63ffac4c52f936b`.
+- **Post-merge checks at that merge commit:** docs run `33006117876`, CI run `33006117878`, and supply-chain run `33006117856` — all passed.
+
+Gate 1 remains open. L03 delivers hermetic watchdog authority and local-protocol proof only; L04–L08 still require commit/recovery orchestration, OOB, end-to-end fixture, and authorized spare-node evidence.
+
 ## PLAN / RED / GREEN evidence
 
 | Phase | SHA | Artifact |
@@ -226,13 +236,11 @@ Focused L03 hermetic matrix at `d5baa0c`: epoch allocation 3 + record semantics 
 
 DCO sign-off present on every commit `01a4bf8..HEAD`.
 
-**Do not treat pushed-head CI, scenario verification, or native review at `52984ce` as current** — those gates are stale after epoch repair. Fresh exact-pushed-head full local gates, CI, scenario verification, and native review are required after the RESULT commit is pushed.
-
-**Merge readiness:** not claimed. All prior CI, scenario verification, and native GitHub review evidence at heads before `d5baa0c` is stale. Fresh exact-pushed-head CI, independent scenario verification of the complete hermetic failure/authority matrix, and a new native GitHub review by `agentos-reviewer` (ID `302623761`) are still required.
+**Historical note:** the CI, scenario-verification, and review evidence at `52984ce` is stale after later repairs. It was superseded by the final exact-head review at `31b4ff2` and the merged-main check results recorded in Final merge closeout.
 
 ## Hard non-goals held (L03-AC12)
 
-No L04 commit/recovery orchestration; no actual promotion/revert execution; no L05 OOB implementation; no live watchdog/systemd install/start; no live NixOS/profile/boot/network/firewall/Proxmox mutation; **no deployment, activation, or live host mutation occurred in this lane**; no credentials/keys/external epoch store; no Gate 2+; no router/reconciler/repository-setting changes; no merge.
+No L04 commit/recovery orchestration; no actual promotion/revert execution; no L05 OOB implementation; no live watchdog/systemd install/start; no live NixOS/profile/boot/network/firewall/Proxmox mutation; **no deployment, activation, or live host mutation occurred in this lane**; no credentials/keys/external epoch store; no Gate 2+; no router/reconciler/repository-setting changes.
 
 ## Residual gaps (explicit)
 
@@ -243,5 +251,4 @@ No L04 commit/recovery orchestration; no actual promotion/revert execution; no L
 - **Temp-name uniqueness** uses `SystemTime` nanos in helper paths — adequate for hermetic L03 but not claimed as full live readiness hardening; follow-up hardening may adopt stronger entropy without changing authority semantics.
 - No live dedicated-mount provisioning, systemd daemon, NixOS VM, power-loss, spare-node chaos, or OOB mirror evidence — deferred to later authorized lanes (L04–L08).
 - Broker transaction engine does not yet wire full watchdog RPC orchestration (L04 scope).
-- **Prior CI/scenario/native-review evidence is stale** after epoch-allocation repair through `d5baa0c`; fresh exact-pushed-head gates still required (see Verification commands).
 - Gate 1 remains open; this lane delivers L03 hermetic proof only (PLAN §9).
