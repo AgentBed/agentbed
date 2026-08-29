@@ -36,6 +36,8 @@ apt + Btrfs snapshot adapter implementing the per-resource safety vector; chaos 
 ## Gate 6 — Desktops
 Per-agent desktop containers (computer-use-linux + KasmVNC), snapshot/restore, takeover; opt-in shared desktop documented as a single trust domain; desktop input carries E whenever the desktop has external egress; desktop profiles live on the `desktop_data` resource.
 
+**Deferred design-spike note (not a Gate 1–5 dependency):** before choosing or adding an alternate desktop/executor substrate, define an `AgentComputerRuntime` adapter boundary for lifecycle, health, owner/manifest binding, snapshot-capability reporting, teardown, and takeover. AgentBed retains authority for identity, manifest compilation, effect classification, credentials, approvals, and audit records. The reference implementation remains the rootless Podman/Quadlet desktop runtime specified by ADR-001; Kata, Firecracker, or other microVM runtimes are optional future backends, evaluated only after the Gate 6 reference desktop passes its contract and isolation evidence.
+
 ## Staff-readiness conditions (from [research/agent-runtime-vision.md](research/agent-runtime-vision.md) §6)
 
 AgentBed Staff (the deferred first-party runtime) imposes four conditions on the MCP surface. They are **design constraints on how features are built when they land, not new exit tests** — cheap now, expensive to retrofit:
