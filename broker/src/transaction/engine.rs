@@ -744,5 +744,5 @@ fn apply_fingerprint(params: &TxApplyParams) -> String {
 }
 
 fn new_tx_id() -> TxId {
-    ulid::Ulid::new().to_string()
+    ulid::Ulid::generate().to_string()
 }
