@@ -1,7 +1,7 @@
 # AGB-10 — Patch rustls supply-chain advisory
 
-**Issue:** AGB-10 · `workflow:guarded`  
-**Baseline:** `c6087481e77d786889376a3325f12751bf98c2e7` (`origin/main`, verified 2026-09-21)  
+**Issue:** AGB-10 · `workflow:guarded`
+**Baseline:** `c6087481e77d786889376a3325f12751bf98c2e7` (`origin/main`, verified 2026-09-21)
 **Advisory:** RUSTSEC-2026-0285 / GHSA-2mjx-qc3c-rqvc — rustls 0.23.43 affected; patched in 0.23.45.
 
 ## Scope

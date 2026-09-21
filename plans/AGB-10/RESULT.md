@@ -1,10 +1,10 @@
 # AGB-10 — RESULT
 
-**Issue:** AGB-10 · `workflow:guarded`  
-**Worktree:** `/home/lpbaril/multica_workspaces/workspace-77a551fa4fb4/task-c7657b30781d/workdir/agentbed`  
-**Branch:** `agent/cursor-implementer/c7657b30781d`  
-**Baseline:** `c6087481e77d786889376a3325f12751bf98c2e7`  
-**Toolchain:** Rust 1.98.0 (`rust-toolchain.toml`)  
+**Issue:** AGB-10 · `workflow:guarded`
+**Worktree:** `/home/lpbaril/multica_workspaces/workspace-77a551fa4fb4/task-c7657b30781d/workdir/agentbed`
+**Branch:** `agent/cursor-implementer/c7657b30781d`
+**Baseline:** `c6087481e77d786889376a3325f12751bf98c2e7`
+**Toolchain:** Rust 1.98.0 (`rust-toolchain.toml`)
 **Advisory:** RUSTSEC-2026-0285 / GHSA-2mjx-qc3c-rqvc
 
 ## Summary
@@ -18,7 +18,7 @@ Minimal `Cargo.lock` update: `rustls` 0.23.43 → 0.23.45 via `cargo update -p r
 | **AC-01** | PASS | Only `Cargo.lock` changed (2 lines: version + checksum). `rustls` 0.23.45 in lockfile. |
 | **AC-02** | PASS (RED at baseline) | Hermes independently reproduced RED at immutable base `c6087481` in `/home/lpbaril/.hermes/cache/scratch/agb10-baseline-red`: `/tmp/agb10-cargo-bin/bin/cargo-deny --log-level error --all-features check advisories licenses bans sources` → exit **1**, `error[vulnerability] RUSTSEC-2026-0285`; advisories FAILED, bans/licenses/sources ok. |
 | **AC-03** | PASS (GREEN post-update) | `/tmp/agb10-cargo-bin/bin/cargo-deny --log-level error --all-features check advisories licenses bans sources` → exit **0**, `advisories ok, bans ok, licenses ok, sources ok`. `cargo tree --locked --all-features -i rustls` → `rustls v0.23.45`. |
-| **AC-04** | PASS | All commands below exit **0** on Linux with `RUSTFLAGS='-D warnings'`. Tests use injected/fake harnesses only; no live host mutation. |
+| **AC-04** | PASS | All commands below exit **0** on Linux with `RUSTFLAGS='-D warnings'`. `git diff --check c6087481e77d786889376a3325f12751bf98c2e7 HEAD` validates the full PR delta (not bare `git diff --check` on a clean tree). Tests use injected/fake harnesses only; no live host mutation. |
 | **AC-05** | PASS | This RESULT maps all ACs. Gate 1 scope, security policy, and application behavior unchanged. No exploitability audit claimed. |
 | **AC-06** | PASS | DCO sign-off commits; one PR against `main`; no merge. |
 
@@ -50,7 +50,12 @@ RUSTFLAGS='-D warnings' cargo fmt --all -- --check          # exit 0
 RUSTFLAGS='-D warnings' cargo clippy --locked --workspace --all-targets -- -D warnings  # exit 0
 RUSTFLAGS='-D warnings' cargo build --locked --workspace --all-targets                # exit 0
 RUSTFLAGS='-D warnings' cargo test --locked --workspace                              # exit 0 (all workspace tests passed)
-git diff --check                                                                      # exit 0
+
+# Pre-commit (working tree vs baseline, after doc whitespace fix):
+git diff --check c6087481e77d786889376a3325f12751bf98c2e7                          # exit 0
+
+# Post-commit (full PR delta vs baseline):
+git diff --check c6087481e77d786889376a3325f12751bf98c2e7 HEAD                     # exit 0
 ```
 
 ## Diff scope
